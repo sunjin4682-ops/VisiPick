@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# .NET 빌드 아티팩트
+data/bin/
+data/obj/
+data/.vs/
+
+# 런타임 데이터
+logs/
+backup/
+data/visipick.db
+data/visipick.db-shm
+data/visipick.db-wal
+mosquitto/data/
+
+# 일반
+*.min.js
+*.lock
+coverage/
+dist/
+build/
