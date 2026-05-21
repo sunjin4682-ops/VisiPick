@@ -1,0 +1,87 @@
+{
+  "vision": {
+    "camera_index": 0,
+    "threshold": 30,
+    "confidence_min": 0.85,
+    "dummy_mode": true,
+    "dummy_interval_sec": 3
+  },
+
+  "serial": {
+    "port": "COM8",
+    "baudrate": 115200
+  },
+
+  "esp32_mock": {
+    "host": "localhost",
+    "port": 9001
+  },
+
+  "robot_mock": {
+    "host": "localhost",
+    "port": 9002
+  },
+
+  "agv_mock": {
+    "host": "localhost",
+    "port": 9003
+  },
+
+  "gates": {
+    "A": { "servo_pin": 13, "open_angle": 90, "close_angle": 0, "delay_ms": 500 },
+    "B": { "servo_pin": 27, "open_angle": 90, "close_angle": 0, "delay_ms": 500 },
+    "C": { "servo_pin": 14, "open_angle": 90, "close_angle": 0, "delay_ms": 500 }
+  },
+
+  "robot": {
+    "port": "/dev/ttyAMA0",
+    "baudrate": 1000000,
+    "speed": 20,
+    "dummy_mode": true,
+    "positions": {
+      "home":     [0, 0, 0, 0, 0, 0],
+      "buffer_A": [0, -30, -60, 0, 90, 0],
+      "buffer_B": [0, -30, -60, 0, 90, 0],
+      "buffer_C": [0, -30, -60, 0, 90, 0],
+      "tray_A":   [45, -30, -60, 0, 90, 0],
+      "tray_B":   [60, -30, -60, 0, 90, 0],
+      "tray_C":   [75, -30, -60, 0, 90, 0]
+    }
+  },
+
+  "agv": {
+    "count": 2,
+    "speed": 50,
+    "dummy_mode": true,
+    "nodes": {
+      "start":       "N1",
+      "warehouse_A": "N5",
+      "warehouse_B": "N6",
+      "warehouse_C": "N7"
+    }
+  },
+
+  "mqtt": {
+    "broker": "localhost",
+    "port": 1883,
+    "topics": {
+      "inspection":   "factory/visipick/inspection",
+      "robot_cmd":    "factory/visipick/robot/cmd",
+      "agv_status":   "factory/visipick/agv/{id}/status",
+      "system_event": "factory/visipick/system/event",
+      "gate_cmd":     "factory/visipick/gate/cmd"
+    }
+  },
+
+  "database": {
+    "path": "C:\\VisiPick\\data\\visipick.db",
+    "retention_days_inspection": 30,
+    "retention_days_events": 7
+  },
+
+  "system": {
+    "heartbeat_interval_sec": 2,
+    "log_dir": "logs",
+    "demo_cycles": 50
+  }
+}

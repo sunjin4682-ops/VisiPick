@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# Database (런타임 데이터 — 백업은 backup/ 에서 관리)
+data/visipick.db
+data/visipick.db-shm
+data/visipick.db-wal
+
+# .NET build output & IDE cache
+data/bin/
+data/obj/
+data/.vs/
+
+# MQTT 런타임 데이터
+mosquitto/data/
+
+# Claude Code 세션 설정 (로컬 전용)
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# 환경 변수 / 시크릿
+*.env
+secrets.*
