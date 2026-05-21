@@ -78,8 +78,10 @@ C:\VisiPick\
 - [x] 각 모듈 단독 실행 테스트 (`python src/utils/logger.py` 등)
 - [x] Mock 서버 3개 실행 후 `python tests/auto_test.py` 전체 테스트
 - [x] 오류 발생 시 import 경로 재확인 및 수정
-- [ ] CLAUDE.md DYNAMIC 블록 업데이트 (테스트 결과 반영)
-- [ ] Git 초기화 및 첫 커밋 (`git init` → `git add` → `git commit`)
+- [x] CLAUDE.md DYNAMIC 블록 업데이트 (테스트 결과 반영)
+- [x] Git 초기화 및 첫 커밋 (`git init` → `git add` → `git commit`)
+- [x] GitHub 저장소 생성 및 push
+- [x] SourceTree 연결 안내
 
 ---
 
@@ -104,9 +106,33 @@ C:\VisiPick\
 | `mock/MockESP32.py` | 동일 | 동일 |
 | `config/config.json` | `esp32_mock` 항목 없음 | `"esp32_mock": {"host":"localhost","port":9001}` 추가 |
 
+#### Git / GitHub 연동
+- `.gitignore` 생성 (`.venv/`, `logs/`, `data/visipick.db*`, `data/.vs/`, `data/bin/`, `data/obj/`, `mosquitto/data/`, `.claude/` 제외)
+- 첫 커밋: `f51ebda` — 42개 파일, 2600줄
+- GitHub 저장소: https://github.com/sunjin4682-ops/VisiPick
+- 원격 브랜치: `origin/main`
+- SourceTree: `C:\VisiPick` 를 **Add** 탭으로 연결
+
+---
+
+### 진행 중인 작업 🔄
+
+- 없음 (2026-05-21 전체 완료)
+
+---
+
+### 다음 세션 시작 시 할 일
+
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 로 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행 (현재까지 5사이클만 확인)
+- [ ] `src/utils/heartbeat.py` 에 ESP32(9001) 모니터링 추가
+
+---
+
 ### 이슈 및 주의사항 ⚠️
 - `tests/testsets.py`는 실제 ESP32 IP(`192.168.0.38`)에 연결하는 파일 — Mock 환경에서는 `tests/auto_test.py` 사용
-- `src/utils/heartbeat.py`는 ESP32(9001)를 체크하지 않음 — 실제 하드웨어 연결 시 config에 `esp32_mock` 키 추가 필요
+- `src/utils/heartbeat.py`는 현재 ESP32(9001)를 체크하지 않음 — 실제 하드웨어 연결 시 추가 필요
+- GitHub 계정: `sunjin4682-ops` (이전 캐시 계정 `silverb530` 충돌 → Windows 자격증명 관리자에서 정리 완료)
 
 ---
 

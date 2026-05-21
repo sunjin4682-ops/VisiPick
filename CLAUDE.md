@@ -169,18 +169,25 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 
 ## 현재 상태 (업데이트 시 이 섹션만 수정)
 
-### 마지막 알려진 성능
-- 50사이클 성공률: 100%
-- 평균 사이클 타임: 8.03초
-- 총 소요: 401.29초
+### GitHub
+- 저장소: https://github.com/sunjin4682-ops/VisiPick
+- 브랜치: `main`
+- 마지막 커밋: `f51ebda` — Initial commit (42 files)
 
-### 완료된 구조 변경
-- 루트 평탄 구조 → `src/core`, `src/api`, `src/utils` 패키지 구조로 리팩터링
-- `VisiPickData/` → `data/` 이름 변경 (EF Core 프로젝트 + DB 통합)
-- `VisiPickEnv/` → `.venv/` 이름 변경
-- `config.json` → `config/config.json` 이동
-- `docker-compose.yml` → `config/docker-compose.yml` 이동
-- 모든 mock 서버 `setup_logger()` 통일
+### 테스트 결과 (2026-05-21, 5사이클 Mock 환경)
+- 성공률: 100% (5/5)
+- 평균 사이클 타임: 8.02초
 
-### 진행 중 / 다음 작업
-- 없음 (구조 리팩터링 완료)
+### 완료된 작업 (2026-05-21)
+- 루트 평탄 구조 → `src/core`, `src/api`, `src/utils` 패키지 구조 리팩터링
+- `VisiPickData/` → `data/`, `VisiPickEnv/` → `.venv/` 이름 변경
+- `config/config.json` 구조 개선 (`esp32_mock` 항목 추가)
+- 모든 mock 서버 `setup_logger()` 통일 + 응답에 `\n` 추가
+- `src/utils/logger.py` — Windows CP949 콘솔 인코딩 오류 수정 (UTF-8 래핑)
+- `src/core/state_machine.py` — `dummy_mode` 시 TCP 전환 (COM8 시리얼 불필요)
+- `.gitignore` 생성 및 git 초기화, GitHub push 완료
+
+### 다음 작업
+- ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- `tests/auto_test.py` 50사이클 정식 실행
+- `src/utils/heartbeat.py` 에 ESP32(9001) 모니터링 추가
