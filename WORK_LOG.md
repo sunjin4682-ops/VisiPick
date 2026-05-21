@@ -136,6 +136,32 @@ C:\VisiPick\
 
 ---
 
+## 2026-05-21 (2차)
+
+### 완료된 작업 ✅
+
+#### .claudeignore 생성
+- `.venv/`(6,833개), `data/bin/`, `data/obj/`, `data/.vs/`, `logs/`, `mosquitto/data/` 등 차단
+- 실수로 읽힐 경우 수십만 토큰 낭비 방지
+
+#### DB 관리 Python 전환 (`src/utils/db_init.py`)
+- .NET EF Core 의존성 제거 — `dotnet` 없이 DB 세팅 가능
+- 3개 테이블(InspectionResults, AgvMissions, SystemEvents) + 인덱스 6개 + WAL 모드
+- 보존 기간 초과 레코드 자동 삭제 (`cleanup_old_records()`)
+- 실행: `python -m src.utils.db_init`
+
+### 다음 할 일
+- [ ] `data/` 에서 .NET 프로젝트 파일 삭제 (`.cs`, `.csproj`, `.sln`, `Migrations/`, `Models/`, `bin/`, `obj/`, `.vs/`)
+- [ ] `.gitignore`, `.claudeignore` 에서 .NET 관련 항목 정리
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+
+### 이슈 및 주의사항 ⚠️
+- 기존 DB(`data/visipick.db`)는 EF Core가 만든 `__EFMigrationsHistory` 테이블이 남아있음 — 동작에는 무관
+- 새 환경에서는 `python -m src.utils.db_init` 으로 DB 초기화
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD

@@ -187,7 +187,13 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - `src/core/state_machine.py` — `dummy_mode` 시 TCP 전환 (COM8 시리얼 불필요)
 - `.gitignore` 생성 및 git 초기화, GitHub push 완료
 
+### 완료된 작업 (2026-05-21 2차)
+- `.claudeignore` 추가 (토큰 낭비 방지 — `.venv/` 6,833개 파일 등 차단)
+- `src/utils/db_init.py` 추가 — .NET EF Core 대체, Python으로 DB 스키마 관리
+  - 실행: `python -m src.utils.db_init`
+
 ### 다음 작업
+- `data/` 내 .NET 프로젝트 파일 삭제 (`.cs`, `.csproj`, `.sln`, `Migrations/`, `Models/`)
 - ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
 - `tests/auto_test.py` 50사이클 정식 실행
 - `src/utils/heartbeat.py` 에 ESP32(9001) 모니터링 추가
