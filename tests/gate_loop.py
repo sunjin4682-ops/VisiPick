@@ -17,7 +17,7 @@ print("게이트 연속 동작 시작 (Ctrl+C로 중지)")
 while True:
     for gate in ["A", "B", "C"]:
         # 열기
-        client.publish("factory/visipick/gate/cmd", json.dumps({
+        client.publish("visipick/gate/cmd", json.dumps({
             "type": "gate_cmd",
             "gate": gate,
             "action": "open"
@@ -26,7 +26,7 @@ while True:
         time.sleep(1)
 
         # 닫기
-        client.publish("factory/visipick/gate/cmd", json.dumps({
+        client.publish("visipick/gate/cmd", json.dumps({
             "type": "gate_cmd",
             "gate": gate,
             "action": "close"

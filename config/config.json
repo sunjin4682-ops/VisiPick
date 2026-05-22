@@ -1,10 +1,18 @@
 {
   "vision": {
-    "camera_index": 0,
-    "threshold": 30,
-    "confidence_min": 0.85,
     "dummy_mode": true,
     "dummy_interval_sec": 3
+  },
+
+  "cameras": {
+    "top":  { "index": 0, "width": 1920, "height": 1080, "fps": 90 },
+    "side": { "index": 1 }
+  },
+
+  "conveyor": {
+    "speed_cm_per_s": 1.5,
+    "gate1_delay_ms": 0,
+    "gate2_delay_ms": 0
   },
 
   "serial": {
@@ -12,41 +20,16 @@
     "baudrate": 115200
   },
 
-  "esp32_mock": {
-    "host": "localhost",
-    "port": 9001
-  },
-
-  "robot_mock": {
-    "host": "localhost",
-    "port": 9002
-  },
-
-  "agv_mock": {
-    "host": "localhost",
-    "port": 9003
-  },
-
   "gates": {
-    "A": { "servo_pin": 13, "open_angle": 90, "close_angle": 0, "delay_ms": 500 },
-    "B": { "servo_pin": 27, "open_angle": 90, "close_angle": 0, "delay_ms": 500 },
-    "C": { "servo_pin": 14, "open_angle": 90, "close_angle": 0, "delay_ms": 500 }
+    "1": { "servo_pin": 13, "push_angle": 90, "return_angle": 0, "delay_ms": 500 },
+    "2": { "servo_pin": 27, "push_angle": 90, "return_angle": 0, "delay_ms": 500 }
   },
 
   "robot": {
-    "port": "/dev/ttyAMA0",
-    "baudrate": 1000000,
-    "speed": 20,
-    "dummy_mode": true,
-    "positions": {
-      "home":     [0, 0, 0, 0, 0, 0],
-      "buffer_A": [0, -30, -60, 0, 90, 0],
-      "buffer_B": [0, -30, -60, 0, 90, 0],
-      "buffer_C": [0, -30, -60, 0, 90, 0],
-      "tray_A":   [45, -30, -60, 0, 90, 0],
-      "tray_B":   [60, -30, -60, 0, 90, 0],
-      "tray_C":   [75, -30, -60, 0, 90, 0]
-    }
+    "host": "192.168.0.47",
+    "port": 9002,
+    "speed": 80,
+    "dummy_mode": true
   },
 
   "agv": {
@@ -54,22 +37,30 @@
     "speed": 50,
     "dummy_mode": true,
     "nodes": {
-      "start":       "N1",
-      "warehouse_A": "N5",
-      "warehouse_B": "N6",
-      "warehouse_C": "N7"
+      "start":     "N1",
+      "warehouse": "WAREHOUSE"
     }
+  },
+
+  "recipe": {
+    "parts": ["NE555P", "CD4017BE", "ATmega328P", "74HC595N"]
+  },
+
+  "mock": {
+    "esp32": { "host": "localhost", "port": 9001 },
+    "robot": { "host": "localhost", "port": 9002 },
+    "agv":   { "host": "localhost", "port": 9003 }
   },
 
   "mqtt": {
     "broker": "localhost",
     "port": 1883,
     "topics": {
-      "inspection":   "factory/visipick/inspection",
-      "robot_cmd":    "factory/visipick/robot/cmd",
-      "agv_status":   "factory/visipick/agv/{id}/status",
-      "system_event": "factory/visipick/system/event",
-      "gate_cmd":     "factory/visipick/gate/cmd"
+      "inspection":   "visipick/inspection",
+      "robot_cmd":    "visipick/robot/cmd",
+      "agv_status":   "visipick/agv/{id}/status",
+      "system_event": "visipick/system/event",
+      "gate_cmd":     "visipick/gate/cmd"
     }
   },
 

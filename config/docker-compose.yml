@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mosquitto:
     image: eclipse-mosquitto:2.0
@@ -8,7 +6,7 @@ services:
       - "1883:1883"     # MQTT
       - "9001:9001"     # WebSocket (Blazor용)
     volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/logs:/mosquitto/log
+      - ../mosquitto/config:/mosquitto/config
+      - ../mosquitto/data:/mosquitto/data
+      - ../mosquitto/logs:/mosquitto/log
     restart: unless-stopped

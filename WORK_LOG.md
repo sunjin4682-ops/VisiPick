@@ -5,12 +5,163 @@
 # VisiPick 작업 로그
 
 - **프로젝트명:** VisiPick
-- **작업 시작일:** 2026-05-21
-- **목표:** 루트에 흩어진 Python 파일들을 역할별 폴더로 구조화하고, 유지보수 가능한 패키지 구조 확립
+- **작업 시작일:** 2026-05-12
+- **목표:** 스마트팩토리 부품 검사·분류 시스템 백엔드/인프라 구축 (8주차 Tier 1)
+
+---
+
+## 2026-05-12
+
+### 완료된 작업 ✅
+
+#### 기술 스택 결정
+- Oracle → SQLite 전환 (개발 편의성, WAL 모드로 동시 읽기/쓰기 안전)
+- TPS 계산 결과 최대 1~2 TPS → PostgreSQL은 오버스펙으로 판단
+
+#### Mosquitto MQTT Broker 설치
+- Docker Compose로 설치 (`C:\VisiPick\docker-compose.yml`)
+- 포트: 1883 (MQTT), 9001 (WebSocket)
+- 설정: `allow_anonymous true`
+- 방화벽: `netsh advfirewall` 1883 포트 개방
+
+#### SQLite 스키마 + EF Core
+- NuGet: `Microsoft.EntityFrameworkCore.Sqlite 10.0.0`
+- 테이블 3개: InspectionResults(9컬럼), AgvMissions(9컬럼), SystemEvents(5컬럼)
+- 인덱스: Timestamp, Class, GateUsed, AgvId
+- 마이그레이션: `dotnet ef migrations add InitSqlite`
+- DB 경로: `C:\VisiPick\VisiPickData\visipick.db`
+- 백업: `backup.ps1` (Windows 작업 스케줄러 매일 자정 등록)
+
+#### Flask 백엔드 초기 구축
+- 구조: main.py, app/api/routes.py, app/vision/detector.py, app/mqtt/publisher.py
+- 더미 모드: 3초마다 가짜 검사 결과 MQTT 발행
+- API: /health, /api/vision/start, /api/vision/stop, /api/inspection/save
+
+---
+
+### 이슈 및 주의사항 ⚠️
+- 네트워크 분리 문제: 김선진(유선 이더넷 192.168.0.46), 박은수(무선 WiFi) → ESP32 MQTT 연결 실패 → 시리얼 전환 검토 시작
+
+---
+
+## 2026-05-14
+
+### 완료된 작업 ✅
+
+#### Flask → 순수 Python 전환
+- Flask 제거 결정: WPF가 HTTP API 미사용, MQTT만 사용 → 웹 서버 오버헤드 불필요
+- `vision_service.py` 단일 파일로 대체
+  - MQTT 발행: factory/visipick/inspection, agv/{id}/status, system/event
+  - SQLite 직접 저장 (WAL 모드)
+  - 백그라운드 스레드: inspection_loop(3초), agv_loop(AGV 2대 N1→N5)
+
+#### Mock 시뮬레이터
+- `mock/MockMyCobot.py` (port 9002) — TCP 소켓, robot_cmd 수신 → 2초 시뮬 → robot_ack
+- `mock/MockAGV.py` (port 9003) — TCP 소켓, agv_cmd 수신 → N1→N5 순차 이동 → arrived
+- `test_client.py` — 3개 Mock 통합 테스트, 정상 응답 확인
+
+#### StateMachine (상태 머신)
+- 상태: IDLE → RUNNING → PHASE1(검사·게이트) → PHASE2(로봇) → PHASE3(AGV) → COMPLETE
+- ESP32 시리얼: COM8, 115200bps, JSON+\n 프로토콜
+- Mock TCP: myCobot(9002), AGV(9003)
+- 3회 사이클 테스트 성공
+
+#### 부가 모듈
+- `Heartbeat.py` — 2초마다 TCP 포트 체크(9002, 9003), 상태 변화 감지
+- `Logger.py` — setup_logger(), 콘솔+파일 출력, 날짜별 롤링, 30일 보관
+- `SpcAnalysis.py` — Confidence/CycleTime 기반 Cp/Cpk 계산 (USL=1.0, LSL=0.85)
+
+#### myCobot 280 테스트
+- 라즈베리파이 SSH 연결 (er@192.168.0.47), pymycobot 4.0.4
+- get_angles/get_coords/send_angles/set_gripper_state 테스트 성공
+- 집게 열기/닫기, 관절 이동 확인
+
+---
+
+### 이슈 및 주의사항 ⚠️
+- `send_coords()`는 좌표 계산 실패 시 안 움직임 → `send_angles()`(관절 각도)가 안정적
+
+---
+
+## 2026-05-15
+
+### 완료된 작업 ✅
+
+#### ESP32 시리얼 통신
+- Arduino IDE 설치, ESP32Servo + ArduinoJson 라이브러리
+- 서보 핀: Gate A(13), B(27), C(14)
+- JSON 수신 → gate_cmd 파싱 → 서보 동작 → gate_ack 응답
+- 시리얼 모니터 테스트: `{"type":"gate_cmd","gate":"A","action":"open"}` → 서보 동작 확인
+- StateMachine.py `_send_gate()` 시리얼 연동 (응답 대기 최대 10초)
+- MockESP32 제거 결정 (실제 ESP32 시리얼 연결로 대체)
+
+#### 자동 테스트
+- `AutoTest.py` — 50회 풀 사이클 자동 실행
+- 결과: 성공률 100%, 평균 8.03초/사이클, 전체 401.29초
+- `logs/autotest-YYYYMMDD-HHMMSS.txt` 저장
+
+#### 기술 문서 정리
+- `docs/MESSAGE_SPEC.md` — PC↔ESP32, PC↔myCobot, PC↔AGV JSON 규격
+- `docs/DB_SCHEMA.md` — 3개 테이블 ER, 인덱스 전략, 보관 정책
+- `docs/SYSTEM_OVERVIEW.md` — 팀 역할, 시스템 구성, 통신 흐름
+
+---
+
+### 이슈 및 주의사항 ⚠️
+- 박은수 ESP32 MQTT 연결 시도: rc=-2 (MQTT_CONNECT_FAILED)
+- 원인: 김선진(유선 192.168.0.46), ESP32(무선 192.168.0.38) 네트워크 분리
+- 핫스팟·방화벽 개방 시도 후 **최종 USB 시리얼 통신으로 전환 결정** (안정성, 레이턴시 1~2ms)
+
+---
+
+## 2026-05-16
+
+### 완료된 작업 ✅
+
+#### config.json 외부 설정 적용
+- `config_loader.py` 생성 (UTF-8-sig 인코딩 로드)
+- vision_service.py, StateMachine.py에서 하드코딩 제거
+- BROKER, PORT, DB_PATH, SERIAL_PORT 등 외부화
+
+#### 코드 품질 개선
+- StateMachine.py run() 오류 재시도 로직 (max_retry=3)
+- DB 연결 최적화: 매번 connect/close → 시작 시 한 번만 연결 (check_same_thread=False, WAL)
+- vision ↔ StateMachine 연동: factory/visipick/inspection 구독 → 분류 결과 기반 게이트 제어
+
+#### vision_service.py defect_code 추가
+- DUMMY_COMPONENTS에 defect_code 필드 추가
+- payload + DB 저장에 defect_code 반영
+- result 값을 PASS/DEFECT로 변경
+
+---
+
+### 설계 결정 사항 📌
+
+#### 통신 프로토콜 선택 근거
+- ESP32 게이트(고정, 레이턴시 중요) → USB 시리얼 (1~2ms)
+- myCobot(고정, 양방향 전이중) → 이더넷 TCP (pymycobot 공식 지원)
+- AGV(이동, 무선) → WiFi MQTT (자동 재연결, 다중 장치 관리)
+
+#### Python + C# 이기종 구조
+- Python: OpenCV(카메라), pymycobot(로봇), YOLOv8(AI) 전용 생태계
+- C# WPF: Windows 데스크탑 UI 최적화, 터치스크린
+- MQTT: 두 언어 간 중립적 통신 레이어
+
+#### FastAPI 추가 방향 (취업 관점)
+- Flask "교체"가 아닌 FastAPI "추가"로 결정
+- Swagger UI 발표용 + 이력 조회 REST API + WebSocket
+
+---
+
+### 이슈 및 주의사항 ⚠️
+- config.json은 UTF-8-sig로 읽어야 함 (CP949 디코딩 오류 방지)
+- 게이트는 A/B/C 3개, 부품은 4종류(IC칩/터미널블록/방열판/커패시터) → 분류 매핑 필요
 
 ---
 
 ## 2026-05-21
+
+> **이날 목표:** 루트에 흩어진 Python 파일들을 역할별 폴더로 구조화하고, 유지보수 가능한 패키지 구조 확립
 
 ### 완료된 작업 ✅
 
@@ -159,6 +310,241 @@ C:\VisiPick\
 ### 이슈 및 주의사항 ⚠️
 - 기존 DB(`data/visipick.db`)는 EF Core가 만든 `__EFMigrationsHistory` 테이블이 남아있음 — 동작에는 무관
 - 새 환경에서는 `python -m src.utils.db_init` 으로 DB 초기화
+
+---
+
+---
+
+## 2026-05-22
+
+### 완료된 작업 ✅
+
+#### FastAPI 서버 구축
+- `src/api/api_server.py` — REST API + WebSocket + Swagger UI
+- 패키지 설치: `pip install fastapi uvicorn`
+- 실행: `python src/api/api_server.py` → `http://localhost:8000/docs`
+- Swagger UI 정상 동작 확인 (시스템/검사/통계/제어/이벤트 그룹)
+
+#### REST API 엔드포인트 (10개)
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/health` | 서버 상태 확인 |
+| GET | `/api/config` | 시스템 설정 조회 |
+| GET | `/api/inspections` | 검사 이력 조회 (최근 N건) |
+| GET | `/api/inspections/search` | 검사 이력 필터 검색 |
+| GET | `/api/stats` | 양품률·클래스별·불량유형별 통계 |
+| GET | `/api/stats/spc` | SPC 분석 (Cp/Cpk) |
+| POST | `/api/vision/start` | 카메라 비전 시작 |
+| POST | `/api/vision/stop` | 카메라 비전 중지 |
+| POST | `/api/conveyor/start` | 컨베이어 시작 |
+| POST | `/api/conveyor/stop` | 컨베이어 중지 |
+| GET | `/api/events` | 시스템 이벤트 조회 |
+
+#### WebSocket 구현
+- `/ws` 엔드포인트 — MQTT 수신 → 모든 연결 클라이언트에 broadcast
+- WPF에서 명령 수신 시 MQTT로 전달 (양방향)
+- `factory/visipick/#` 전체 구독
+
+#### 추가 모듈 생성
+| 파일 | 역할 |
+|------|------|
+| `db.py` | SQLite 저장/조회 전용 (save_inspection, save_agv_mission, save_system_event, get_*) |
+| `agv_mqtt.py` | AGV MQTT pub/sub 매니저 (dispatch, get_status, 도착 시 DB 저장) |
+| `tools/mock_publisher.py` | 최지윤 WPF 독립 개발용 가짜 데이터 생성기 |
+
+#### Mock Publisher (최지윤 전달용)
+- 검사 결과(3초), AGV 상태(1~2초), 시스템 이벤트(5초), 공정 상태(4초) 발행
+- Python 서버 없이 WPF 단독 테스트 가능
+- 실행: `python tools/mock_publisher.py`
+
+#### vision_service.py 부품/불량 종류 변경
+- 부품: IC칩, 터미널블록, 방열판, 커패시터
+- 불량: `BENT_PIN`(핀 휨), `BROKEN`(파손)
+- `defect_code` 필드 payload + DB 저장 반영
+
+#### 기술 문서 작성
+- `docs/MQTT_TOPICS.md` — 토픽 명세 (Python ↔ WPF 통일), 페이로드 형식, 구독 목록
+
+---
+
+### 진행 중인 작업 🔄
+
+- 없음
+
+---
+
+### 다음 할 일
+
+- [ ] TRANSITIONS 딕셔너리 방식 상태 머신 적용 (`state_machine.py`)
+- [ ] `config/config.json` 게이트 타이밍 실측값 입력 (박은수)
+- [ ] vision_service ↔ state_machine MQTT 연동 강화 (random 분류 → MQTT 수신 결과 사용)
+- [ ] WPF MQTT 구독 검증 (최지윤)
+- [ ] 실제 하드웨어 연결 테스트
+
+---
+
+### 설계 결정 사항 📌
+
+#### 통신 프로토콜 (용도별 분리)
+- **실시간 데이터**(검사 결과, AGV 위치) → MQTT (Push)
+- **제어 명령**(컨베이어/카메라 시작·중지) → REST API (요청-응답)
+- **이력 조회**(검사 이력, 통계) → REST API
+
+#### 장치별 통신 방식
+- ESP32 게이트(고정, 레이턴시 중요) → USB 시리얼 (1~2ms)
+- myCobot(고정, 전이중) → 이더넷 TCP (pymycobot 공식)
+- AGV(이동, 무선) → WiFi MQTT (자동 재연결)
+
+#### 외부 팀원 설계 근거서 11개 항목 검토
+- ✅ 채용: 단일 마스터, MQTT 처음부터, 상태 머신, SQLite WAL, WPF Pure Display, MQTT 토픽 구조, ESP32 시리얼, myCobot 이더넷
+- ⚠️ 부분 채용: FastAPI("교체"가 아닌 "추가"), 모듈 분리(10개 대신 3~4개)
+- ⚠️ 불채용: Event Bus(MQTT가 이미 동일 역할 → 과설계)
+
+#### 엣지 디바이스 비교 (향후 도입 검토)
+- 1순위: NVIDIA Jetson Orin Nano Super (67 TOPS, 35만원, 생태계 최강)
+- 2순위: RPi5 + Hailo-8 (26 TOPS, 25만원, 가성비)
+- RPi5 단독은 YOLOv8n 200~500ms — 3초 간격 검사면 충분, 실시간 영상은 가속기 필요
+
+---
+
+### 이슈 및 주의사항 ⚠️
+- `api_server.py`의 config 로드는 `encoding="utf-8-sig"` 필수 (CP949 디코딩 오류 방지)
+- 게이트는 A/B/C 3개인데 부품은 4종류 — 커패시터를 A클래스로 분류 중 (변경 가능)
+- WebSocket broadcast의 MQTT 콜백에서 매번 새 event loop 생성 — 부하 발생 시 단일 loop 재사용으로 개선 필요
+
+---
+
+## 2026-05-22 (2차)
+
+### 완료된 작업 ✅
+
+#### V6.3 설계서 반영 — MD 파일 전면 업데이트
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `CLAUDE.md` | V6.3 전면 재작성 — DIP IC 4종, 3클래스 판정, 2카메라, 푸셔 게이트, 트레이 이재, 새 디렉토리 구조 |
+| `docs/DB_SCHEMA.md` | V6.3 스키마 — InspectionResults(컬럼 재정의), RecipeSessions(신규), AgvMissions(FK 추가), SystemEvents(동일) |
+| `docs/SYSTEM_OVERVIEW.md` | 팀 5인 역할 재정의, 새 SW 패키지 구조, HMI 화면 레이아웃 |
+| `docs/MESSAGE_SPEC.md` | gate_cmd(푸셔 방식), robot_cmd(transfer_tray), AGV(MQTT), inspection 페이로드 전면 개정 |
+| `docs/MQTT_Schema.md` | 토픽 prefix `factory/visipick/` → `visipick/`, 전체 페이로드 재정의 |
+| `docs/API_SPEC.md` | Base URL :8000, V6.3 엔드포인트 목록, WPF 독립 개발 안내 |
+
+#### V6.2 → V6.3 핵심 변경 요약
+- **게이트**: 열림/닫힘 3개 → 푸셔 2개 (Gate1: 중복, Gate2: 불량)
+- **분류**: A/B/C 클래스 → NEEDED / DUPLICATE / DEFECT
+- **부품**: IC칩/터미널블록/방열판/커패시터 → NE555P / CD4017BE / ATmega328P / 74HC595N
+- **Camera**: 1개 → 2개 (상부: 종류 식별, 측면: 핀 검사)
+- **myCobot**: 개별 픽업 → 완성 트레이 단위 이재
+- **AGV**: TCP → MQTT, 지게 모듈(서보 25°) 추가
+- **SW 구조**: `vision/`, `orchestrator/`, `devices/` 패키지 추가 예정
+
+---
+
+### 다음 할 일
+
+- [ ] `src/vision/`, `src/orchestrator/`, `src/devices/` 패키지 생성
+- [ ] `src/core/event_bus.py` 구현
+- [ ] `recipe_mgr.py`, `tray_mgr.py`, `decision.py` 구현
+- [ ] Camera1·Camera2 OpenCV 파이프라인 구현
+- [ ] `config/config.json` V6.3 키 구조 업데이트 (cameras, conveyor, recipe)
+- [ ] `src/utils/db_init.py` — RecipeSessions 테이블 추가
+
+### 설계 결정 사항 📌
+
+#### V6.3 핵심 차별화 (설계서 기준)
+- 레시피 기반 키팅 — 기판에 필요한 4종 DIP IC 자동 수집
+- 2단계 검사 — Camera1(종류+1차불량) + Camera2(측면 핀 정밀)
+- 푸셔 게이트 — 불량/중복만 밀어내고 양품은 직진 통과
+- 중력 수집 — 부품이 컨1 끝단에서 트레이로 낙하
+- 트레이 이재 — myCobot이 완성 트레이 통째로 AGV에 올림
+
+#### MQTT 토픽 prefix 변경
+- 구: `factory/visipick/...`
+- 신: `visipick/...` (설계서 V6.3 기준)
+- **영향 범위**: `mock_publisher.py`, `src/core/agv_mqtt.py`, `src/api/api_server.py`, WPF 코드 모두 업데이트 필요
+
+---
+
+## 2026-05-22 (3차)
+
+### 완료된 작업 ✅
+
+#### V6.3 코드 전면 구현
+
+##### config/config.json — V6.3 구조 재작성
+- `cameras` (top/side 2카메라), `conveyor`, `recipe` 섹션 신규 추가
+- `gates`: A/B/C 3개 → `"1"/"2"` 푸셔 게이트 2개
+- `robot`: mock TCP 분리 → `host: "192.168.0.47"` (RPi4 실제 IP)
+- `agv.nodes`: `warehouse_A/B/C` → 단일 `warehouse: "WAREHOUSE"`
+- Mock 호스트/포트 → `mock.esp32/robot/agv` 하위로 통합
+
+##### DB 스키마 V6.3 (`src/utils/db_init.py`, `src/core/db.py`)
+- `InspectionResults`: ComponentType/Class/Result/GateUsed → PartType/Classification/GateAction/RecipeSessionId
+- `RecipeSessions` 테이블 신규 (StartTime, EndTime, Parts, TotalNeeded, TotalFilled, Status)
+- `AgvMissions`: TrayClass/ItemCount → RecipeSessionId FK
+- 신규 함수: `save_recipe_session()`, `complete_recipe_session()`, `get_sessions()`, `get_current_session()`
+- `get_stats()`: NEEDED/DUPLICATE/DEFECT 집계로 변경
+- DB 재초기화 완료 (`data/visipick.db`)
+
+##### src/vision/ 패키지 신규 구현
+| 파일 | 내용 |
+|------|------|
+| `classifier.py` | DIP IC 4종 분류 — 더미: PARTS 랜덤 선택 |
+| `defect_detector.py` | 불량 검출 (Camera1+2) — 더미: 15% 확률 BENT_PIN/BROKEN |
+| `camera_top.py` | Camera1 상부 캡처 — 더미: None 반환, 실제: cv2.VideoCapture |
+| `camera_side.py` | Camera2 측면 캡처 — 더미: None 반환, 실제: cv2.VideoCapture |
+
+##### src/orchestrator/ 패키지 신규 구현
+| 파일 | 내용 |
+|------|------|
+| `decision.py` | `judge(part_type, defect_code, recipe_mgr)` → NEEDED/DUPLICATE/DEFECT, `gate_action_for()` |
+| `recipe_mgr.py` | 레시피 충족 추적: `needs()`, `mark_collected()`, `is_complete()`, `reset()`, `status()` |
+| `tray_mgr.py` | 트레이 낙하 카운트: `on_part_passed()`, `get_count()`, `reset()` |
+
+##### src/devices/ 패키지 신규 구현
+| 파일 | 내용 |
+|------|------|
+| `robot.py` | myCobot 트레이 이송 TCP (더미: MockMyCobot, 실제: RPi4 192.168.0.47) |
+| `serial_ctrl.py` | ESP32 게이트 푸셔 + 컨베이어 (더미: MockESP32 TCP, 실제: COM8) |
+
+##### src/core/state_machine.py — orchestrator 통합
+- 기존 직접 TCP 호출 코드(phase1/2/3) 전면 제거
+- 신규 의존: `CameraTop`, `CameraSide`, `Classifier`, `DefectDetector`, `judge()`, `RecipeManager`, `TrayManager`, `Robot`, `SerialController`, `AGVMqttManager`
+- 주요 흐름:
+  - RUNNING 루프: 카메라 캡처 → 분류 → 불량 검출 → 3클래스 판정 → 게이트 → DB/MQTT 저장
+  - 레시피 완성 시 TRAY_TRANSFER: 로봇 트레이 이송 → AGV 출발 → 세션 완료 처리 → 초기화
+- 상태 전이 시 `visipick/system/state` MQTT 발행 (WPF 연동)
+
+##### src/api/api_server.py — V6.3 엔드포인트 추가
+- 검색 파라미터: `component_type/class_/result` → `part_type/classification`
+- 신규: `/api/sessions`, `/api/sessions/current`, `/api/agv/status`, `/api/agv/missions`
+
+##### src/core/vision_service.py — 더미 데이터 V6.3
+- DUMMY_COMPONENTS: NE555P/CD4017BE/ATmega328P/74HC595N, NEEDED/DUPLICATE/DEFECT, PASS_THROUGH/GATE1_PUSH/GATE2_PUSH
+
+---
+
+### 진행 중인 작업 🔄
+
+- 없음 (2026-05-22 3차 전체 완료)
+
+---
+
+### 다음 할 일
+
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어 연결 후)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어 연결 후)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+
+---
+
+### 설계 결정 사항 📌
+
+#### state_machine.py 통합 방식
+- 기존 state_machine.py가 TCP 직접 호출하던 방식을 모두 devices/orchestrator 모듈로 위임
+- state_machine은 FSM 흐름 제어 + MQTT 브로드캐스트만 담당
+- 더미 모드: config.json의 `vision.dummy_mode: true` 하나로 전체 제어
 
 ---
 

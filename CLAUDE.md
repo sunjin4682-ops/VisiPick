@@ -1,49 +1,87 @@
 # CLAUDE.md
 
-<!-- ═══════════════════════════════════════════════════════════════
-     STATIC  (80–90%) — 자주 바뀌지 않음 · 캐시 히트 대상
-     절대 이 블록 안에 날짜·카운터·버전 번호를 넣지 말 것
-     ═══════════════════════════════════════════════════════════════ -->
-
 ## 프로젝트 개요
 
-VisiPick은 비전 검사 → 로봇 픽앤플레이스 → AGV 운반을 통합한 스마트팩토리 자동화 시스템이다.
+**VisiPick V6.3** — 비정지(Non-stop) 컨베이어 위를 이동하는 DIP IC 4종을 2대의 카메라(상부+측면)로 실시간 검사하고, 레시피 기반으로 3클래스 자동 분류(필요+양품/중복/불량)한 뒤, 양품을 트레이에 중력 수집하고, myCobot이 완성된 트레이를 통째로 AGV에 이재하여 창고까지 운반하는 미니 스마트팩토리 셀이다.
 
-- Python — 전체 오케스트레이션 로직
-- .NET / EF Core — SQLite 데이터 영속성
-- MQTT — 컴포넌트 간 이벤트 버스
-- JSON + newline — 디바이스 TCP 통신 포맷
-- Mock 서버 3종 — 하드웨어 없이 전체 시스템 개발/테스트 가능
+| 기술 | 역할 |
+|------|------|
+| Python Central Server | 단일 마스터 — 모든 상태의 Single Source of Truth |
+| C# WPF | Pure Display Client (WebSocket 수신·표시만) |
+| MQTT (Mosquitto) | AGV 통신 + 내부 이벤트 브로드캐스트 |
+| FastAPI + WebSocket | HMI 통신 (:8000) |
+| SQLite WAL | 데이터 영속성 (4 테이블) |
+| USB Serial → ESP32 | 게이트 푸셔(Gate1·Gate2) + 컨1 스텝모터 |
+| Ethernet TCP → RPi4 | myCobot 트레이 이재 제어 (pymycobot) |
 
-## 시스템 흐름 (3-Phase)
+## 시스템 전체 흐름
 
 ```
-[Vision Inspection] → [Gate Control] → [Robot Pick&Place] → [AGV Transport]
-      Phase 1               Phase 1           Phase 2             Phase 3
+[DIP IC 15개, 4초 간격 투입]
+        ↓
+[컨1: 싸이피아 A2 800mm — Non-stop 1~2cm/s]
+        ↓
+Camera1(상부): 종류 식별 + 레시피 매칭 + 1차 불량
+Camera2(측면): 핀 휘어짐/들뜨 정밀 검사
+        ↓
+┌─ DUPLICATE → Gate1 푸셔 → 반환 bin
+├─ DEFECT    → Gate2 푸셔 → Reject bin
+└─ NEEDED    → 통과 → 컨1 끝단 낙하
+                      ↓
+             [컨2 트레이 대기열]
+             레시피 4종 충족?
+                      ↓ YES
+             [myCobot: 완성 트레이 → AGV]
+                      ↓
+             [AGV → 창고 → 지게(서보 25°) 쏟아내기]
+
+[Python Central Server + C# WPF HMI + SQLite]
 ```
 
 | Phase | 담당 모듈 | 통신 |
 |-------|-----------|------|
-| 1 — 검사·게이트 | `src/core/state_machine.py` | Serial COM8 → ESP32 |
-| 2 — 로봇 | `src/core/state_machine.py` | TCP localhost:9002 |
-| 3 — AGV | `src/core/state_machine.py` | TCP localhost:9003 |
+| 1 — 검사·분류·게이트 | `vision/` + `orchestrator/` + `core/state_machine.py` | USB Serial → ESP32 |
+| 2 — 트레이 이재 | `devices/robot.py` | Ethernet TCP → RPi4 → pymycobot |
+| 3 — AGV 운반 | `devices/agv_mqtt.py` | MQTT → AGV ESP32-CAM |
+
+## 3클래스 판정 로직
+
+```python
+# orchestrator/decision.py
+def judge(part_type, defect_result, recipe_state) -> str:
+    if defect_result.is_defect:           return "DEFECT"     # Gate2 푸셔
+    if not recipe_state.needs(part_type): return "DUPLICATE"  # Gate1 푸셔
+    return "NEEDED"                                            # 통과 → 트레이
+```
+
+## DIP IC 레시피
+
+| # | 부품 | 패키지 | 식별 방법 |
+|---|------|--------|-----------|
+| 1 | NE555P | DIP-8 | 면적 + 핀 수 (8개) |
+| 2 | CD4017BE | DIP-16 | 면적 + 마킹 "4017" |
+| 3 | ATmega328P | DIP-28 | 면적 + 핀 수 (28개) |
+| 4 | 74HC595N | DIP-16 | 면적 + 마킹 "595" |
 
 ## 디렉토리 구조
 
 ```
 C:\VisiPick\
 ├── config/                  # config.json, docker-compose.yml
-├── data/                    # visipick.db + EF Core 프로젝트 (Migrations, Models)
-├── docs/
+├── data/                    # visipick.db (SQLite WAL)
+├── docs/                    # 기술 문서
 ├── logs/                    # 날짜별 롤링 로그 (loguru)
 ├── mock/                    # MockESP32.py · MockMyCobot.py · MockAGV.py
-├── mosquitto/
+├── mosquitto/               # Mosquitto 설정·데이터
 ├── scripts/                 # backup.ps1
 ├── src/
-│   ├── api/                 # api_server.py  (FastAPI + WebSocket)
-│   ├── core/                # state_machine.py · vision_service.py · spc_analysis.py
-│   └── utils/               # logger.py · config_loader.py · heartbeat.py
-├── tests/                   # auto_test.py · testsets.py · gate_loop.py
+│   ├── core/                # state_machine.py · db.py · agv_mqtt.py
+│   ├── vision/              # camera_top.py · camera_side.py · classifier.py · defect_detector.py
+│   ├── orchestrator/        # decision.py · recipe_mgr.py · tray_mgr.py
+│   ├── devices/             # robot.py · serial_ctrl.py
+│   ├── api/                 # api_server.py (FastAPI + WebSocket)
+│   └── utils/               # logger.py · config_loader.py · heartbeat.py · db_init.py
+├── tests/                   # auto_test.py · testsets.py
 └── .venv/
 ```
 
@@ -51,41 +89,46 @@ C:\VisiPick\
 
 | 파일 | 역할 | 핵심 함수/클래스 |
 |------|------|-----------------|
-| `src/core/state_machine.py` | 메인 오케스트레이터 | `VisiPickStateMachine`, `phase1/2/3`, `run()` |
-| `src/core/vision_service.py` | 검사 더미 서비스 | `inspection_loop()`, `save_to_db()` |
-| `src/core/spc_analysis.py` | 품질 지표 (Cp/Cpk) | `load_data()`, `calc_spc()` |
-| `src/api/api_server.py` | REST API + WebSocket | FastAPI app, `/api/inspections`, `/ws` |
+| `src/core/state_machine.py` | 전체 공정 FSM | `IDLE→RUNNING→TRAY_TRANSFER→COMPLETE` |
+| `src/core/db.py` | SQLite I/O 전담 | `save_inspection()`, `save_recipe_session()`, `get_*()` |
+| `src/core/agv_mqtt.py` | AGV MQTT 매니저 | `AGVMqttManager.dispatch()`, `get_status()` |
+| `src/vision/camera_top.py` | Camera1 상부 캡처·전처리 | 종류 식별 + 레시피 매칭 + 1차 불량 |
+| `src/vision/camera_side.py` | Camera2 측면 캡처·전처리 | 핀 휘어짐/들뜨 정밀 검사 |
+| `src/vision/classifier.py` | DIP IC 4종 분류기 | `classify(frame)` → PartType |
+| `src/vision/defect_detector.py` | 불량 검출기 | `detect(frame)` → DefectCode |
+| `src/orchestrator/decision.py` | 3클래스 판정 | `judge()` → NEEDED/DUPLICATE/DEFECT |
+| `src/orchestrator/recipe_mgr.py` | 레시피 매칭 | `needs()`, `mark_collected()`, `is_complete()` |
+| `src/orchestrator/tray_mgr.py` | 트레이 수집 카운트 | `on_part_passed()` |
+| `src/devices/robot.py` | myCobot TCP 제어 | `transfer_tray()` |
+| `src/devices/serial_ctrl.py` | ESP32 시리얼 | `push_gate(gate_id)`, `set_conveyor_speed()` |
+| `src/api/api_server.py` | FastAPI + WebSocket | REST + WS `:8000/docs` |
 | `src/utils/logger.py` | 로깅 추상화 | `setup_logger(name)` |
 | `src/utils/config_loader.py` | 설정 로드 | `config` 딕셔너리 |
-| `src/utils/heartbeat.py` | 디바이스 연결 감시 | `heartbeat_loop()` |
-| `tests/auto_test.py` | 자동 테스트 하네스 | `AutoTest.run()` |
-| `tests/testsets.py` | ESP32 TCP 직접 테스트 | `VisiPickStateMachine.run()` |
-| `data/AppDbContext.cs` | EF Core 컨텍스트 | WAL 모드, 3 테이블 |
 
 ## 실행 명령
 
 ```bash
-# 1. Mock 서버 3개 (별도 터미널)
+# 1. MQTT 브로커
+docker-compose -f config/docker-compose.yml up -d
+
+# 2. Mock 서버 3개 (Mock 환경)
 python mock/MockESP32.py       # port 9001
 python mock/MockMyCobot.py     # port 9002
 python mock/MockAGV.py         # port 9003
 
-# 2. MQTT 브로커
-docker-compose -f config/docker-compose.yml up -d
-
 # 3. 메인 실행
-python src/core/state_machine.py    # 3사이클
-python tests/auto_test.py           # 50사이클 자동 테스트
+python src/core/state_machine.py
 
-# 4. 모니터링
-python src/utils/heartbeat.py       # 디바이스 연결 상태
-python src/core/vision_service.py   # 검사 더미 데이터 생성
-python src/core/spc_analysis.py     # Cp/Cpk 분석
+# 4. API 서버
+python src/api/api_server.py   # http://localhost:8000/docs
 
-# 5. API 서버
-python src/api/api_server.py        # http://localhost:8000
+# 5. WPF 독립 개발용 더미 발행
+python mock_publisher.py
 
-# 6. DB 백업
+# 6. DB 초기화 (최초 1회)
+python -m src.utils.db_init
+
+# 7. DB 백업
 powershell scripts/backup.ps1
 ```
 
@@ -93,44 +136,56 @@ powershell scripts/backup.ps1
 
 | 프로토콜 | 방향 | 엔드포인트 | 포맷 |
 |----------|------|------------|------|
-| Serial | PC ↔ ESP32 | COM8, 115200 baud | JSON + `\n` |
-| TCP | PC ↔ Mock | localhost:9001/9002/9003 | JSON + `\n` |
-| MQTT | Pub/Sub | localhost:1883 | JSON |
-| HTTP/WS | Client ↔ API | localhost:8000 | JSON |
+| USB Serial | PC ↔ ESP32 | COM8, 115200 baud | JSON + `\n` |
+| Ethernet TCP | PC ↔ myCobot | RPi4 IP:9002 | pymycobot |
+| MQTT | PC ↔ AGV 1·2 | localhost:1883 | JSON |
+| WebSocket | Python ↔ WPF | localhost:8000/ws | JSON |
+| HTTP/REST | Client ↔ API | localhost:8000 | JSON |
 
 ## MQTT 토픽
 
 | 토픽 | 방향 | 페이로드 예시 |
 |------|------|--------------|
-| `factory/visipick/inspection` | vision → all | `{"class":"A","result":"PASS","confidence":0.95}` |
-| `factory/visipick/gate/cmd` | SM → ESP32 | `{"type":"gate_cmd","gate":"A","action":"open"}` |
-| `factory/visipick/robot/cmd` | SM → robot | `{"type":"robot_cmd","action":"pick","buffer":"A"}` |
-| `factory/visipick/agv/{id}/status` | AGV → all | `{"agv_id":1,"state":"moving","node":"N3"}` |
-| `factory/visipick/system/event` | any → UI | `{"source":"Camera","event_type":"INFO","message":"..."}` |
+| `visipick/inspection` | vision → all | `{"part_type":"NE555P","classification":"NEEDED","defect_code":"PASS","confidence":0.97}` |
+| `visipick/agv/{id}/status` | AGV → all | `{"agv_id":1,"state":"moving","node":"N3","timestamp":"..."}` |
+| `visipick/agv/{id}/command` | PC → AGV | `{"action":"GO","destination":"WAREHOUSE","timestamp":"..."}` |
+| `visipick/system/event` | any → WPF | `{"source":"Camera1","event_type":"INFO","message":"NE555P 검출"}` |
+| `visipick/system/state` | SM → WPF | `{"state":"TRAY_TRANSFER","timestamp":"..."}` |
 
 ## 설정 (config/config.json 주요 키)
 
 ```json
 {
-  "serial":     { "port": "COM8", "baudrate": 115200 },
-  "robot_mock": { "host": "localhost", "port": 9002 },
-  "agv_mock":   { "host": "localhost", "port": 9003 },
-  "mqtt":       { "broker": "localhost", "port": 1883 },
-  "database":   { "path": "C:\\VisiPick\\data\\visipick.db" },
-  "vision":     { "dummy_mode": true, "dummy_interval_sec": 3 }
+  "cameras": {
+    "top":  { "index": 0, "width": 1920, "height": 1080, "fps": 90 },
+    "side": { "index": 1, "width": 1920, "height": 1080 }
+  },
+  "conveyor": {
+    "speed_cm_per_s": 1.5,
+    "gate1_delay_ms": 0,
+    "gate2_delay_ms": 0
+  },
+  "serial":   { "port": "COM8", "baudrate": 115200 },
+  "robot":    { "host": "192.168.0.47", "port": 9002, "speed": 80 },
+  "mqtt":     { "broker": "localhost", "port": 1883 },
+  "recipe":   { "parts": ["NE555P", "CD4017BE", "ATmega328P", "74HC595N"] },
+  "database": { "path": "C:\\VisiPick\\data\\visipick.db",
+                "retention_days_inspection": 30,
+                "retention_days_events": 7 }
 }
 ```
 
 ## 데이터베이스
 
-- 위치: `data/visipick.db` (WAL 모드 — 동시 읽기 안전)
-- 관리: EF Core (`data/` 폴더, `dotnet ef database update`)
-- 테이블 3개:
+- 위치: `data/visipick.db` (WAL 모드)
+- 초기화: `python -m src.utils.db_init`
+- 테이블 4개:
 
 | 테이블 | 보존 | 주요 컬럼 |
 |--------|------|-----------|
-| `InspectionResults` | 30일 | Class, Result, DefectCode, Confidence, CycleTimeMs |
-| `AgvMissions` | 무제한 | AgvId, Source, Destination, TrayClass |
+| `InspectionResults` | 30일 | PartType, Classification, DefectCode, Confidence, CycleTimeMs, GateAction |
+| `RecipeSessions` | 무제한 | StartedAt, CompletedAt, Slot1~4Part, AgvId |
+| `AgvMissions` | 무제한 | AgvId, Source, Destination, RecipeSessionId |
 | `SystemEvents` | 7일 | Source, EventType, Message |
 
 ## 로깅 규칙
@@ -140,60 +195,54 @@ from src.utils.logger import setup_logger
 logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ```
 
-- 콘솔: 색상 코딩 (초록=시각, 청록=모듈명)
-- 파일: 00:00 일별 롤링, 30일 보존, UTF-8
-- **mock/ 에서 import 시** `sys.path.insert(0, str(Path(__file__).parent.parent))` 필요
+- 콘솔: 색상 코딩 (UTF-8 — Windows CP949 래핑 적용)
+- 파일: 00:00 일별 롤링, 30일 보존
 
 ## 코딩 규칙
 
-- 모든 `import`는 `from src.utils.logger import setup_logger` 형식 사용 (루트 상대 임포트 금지)
-- TCP 전송: `json.dumps(msg, ensure_ascii=False) + "\n"` — 한글 로그 지원
-- 설정값은 반드시 `config_loader.config["키"]` 에서 읽을 것 (하드코딩 금지)
+- `import`: `from src.utils.logger import setup_logger` 형식 (루트 상대 임포트 금지)
+- TCP 전송: `json.dumps(msg, ensure_ascii=False) + "\n"` — 한글 지원
+- 설정값: 반드시 `config_loader.config["키"]`에서 읽기 (하드코딩 금지)
 - `setup_logger()` 호출 후 `logger.add()` 재호출 금지 (핸들러 중복)
+- 모듈 간 통신: MQTT 경유 (WPF·AGV와 동일한 방식, event_bus 불필요)
 
 ## 디버깅
 
 | 증상 | 원인 / 해결 |
 |------|------------|
-| ESP32 응답 없음 (타임아웃) | `python mock/MockESP32.py` 미실행 또는 COM8 미연결 |
+| Camera1/2 인식 안 됨 | `index` 번호 확인 — USB 연결 순서에 따라 0/1이 바뀜 |
+| ESP32 응답 없음 | `python mock/MockESP32.py` 실행 또는 COM8 연결 확인 |
 | MQTT connection refused | `docker-compose -f config/docker-compose.yml up -d` |
-| Database locked | WAL 미활성 — `data/AppDbContext.cs` 확인 |
-| 한글 깨짐 | `logger.py` encoding="utf-8" 확인 |
-| TCP timeout | `config/config.json` host/port vs Mock 실행 포트 확인 |
+| myCobot timeout | `config["robot"]` host/port 확인 (RPi4 IP) |
+| AGV MQTT 미수신 | AGV ESP32-CAM Wi-Fi + Mosquitto 브로커 연결 확인 |
+| 한글 깨짐 | `logger.py` UTF-8 래핑 확인 |
 | ImportError: src.utils… | 실행 디렉토리가 `C:\VisiPick` 인지 확인 |
-
-<!-- ═══════════════════════════════════════════════════════════════
-     DYNAMIC (10–20%) — 자주 바뀌는 정보만 여기에
-     날짜·카운터·진행 상태를 이 블록에만 기록할 것
-     ═══════════════════════════════════════════════════════════════ -->
+| 게이트 타이밍 오차 | `config["conveyor"]["gate1_delay_ms"]` 실측 후 조정 |
 
 ## 현재 상태 (업데이트 시 이 섹션만 수정)
 
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `main`
-- 마지막 커밋: `f51ebda` — Initial commit (42 files)
+- 마지막 커밋: `f830499`
 
-### 테스트 결과 (2026-05-21, 5사이클 Mock 환경)
-- 성공률: 100% (5/5)
-- 평균 사이클 타임: 8.02초
+### 설계 버전
+- **V6.3** (2026-05-22 반영)
+- V6.2 대비: 푸셔 게이트 2개, 2단계 검사(상부+측면), 중력 수집, 트레이 단위 이재, MQTT AGV, Python 단일 마스터
 
-### 완료된 작업 (2026-05-21)
-- 루트 평탄 구조 → `src/core`, `src/api`, `src/utils` 패키지 구조 리팩터링
-- `VisiPickData/` → `data/`, `VisiPickEnv/` → `.venv/` 이름 변경
-- `config/config.json` 구조 개선 (`esp32_mock` 항목 추가)
-- 모든 mock 서버 `setup_logger()` 통일 + 응답에 `\n` 추가
-- `src/utils/logger.py` — Windows CP949 콘솔 인코딩 오류 수정 (UTF-8 래핑)
-- `src/core/state_machine.py` — `dummy_mode` 시 TCP 전환 (COM8 시리얼 불필요)
-- `.gitignore` 생성 및 git 초기화, GitHub push 완료
-
-### 완료된 작업 (2026-05-21 2차)
-- `.claudeignore` 추가 (토큰 낭비 방지 — `.venv/` 6,833개 파일 등 차단)
-- `src/utils/db_init.py` 추가 — .NET EF Core 대체, Python으로 DB 스키마 관리
-  - 실행: `python -m src.utils.db_init`
+### 구현 상태
+- ✅ FastAPI + WebSocket (`src/api/api_server.py`)
+- ✅ SQLite DB 레이어 (`src/core/db.py`) — V6.3 스키마
+- ✅ AGV MQTT 매니저 (`src/core/agv_mqtt.py`)
+- ✅ Mock Publisher (`mock_publisher.py` — WPF 독립 개발용)
+- ✅ `config/config.json` V6.3 키 구조
+- ✅ `src/utils/db_init.py` — RecipeSessions 포함 4 테이블
+- ✅ `src/vision/` — `classifier.py`, `defect_detector.py`, `camera_top.py`, `camera_side.py` (더미 모드)
+- ✅ `src/orchestrator/` — `decision.py`, `recipe_mgr.py`, `tray_mgr.py`
+- ✅ `src/devices/` — `robot.py`, `serial_ctrl.py`
+- 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
 ### 다음 작업
-- `data/` 내 .NET 프로젝트 파일 삭제 (`.cs`, `.csproj`, `.sln`, `Migrations/`, `Models/`)
-- ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
-- `tests/auto_test.py` 50사이클 정식 실행
-- `src/utils/heartbeat.py` 에 ESP32(9001) 모니터링 추가
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어)
+- [ ] `state_machine.py` — orchestrator/vision/devices 모듈과 통합 (현재 state_machine은 독립 더미)

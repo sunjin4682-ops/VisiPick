@@ -19,28 +19,39 @@ def init_db():
     conn.executescript("""
         PRAGMA journal_mode=WAL;
 
+        CREATE TABLE IF NOT EXISTS RecipeSessions (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            StartTime   TEXT    NOT NULL,
+            EndTime     TEXT,
+            Parts       TEXT    NOT NULL DEFAULT '',
+            TotalNeeded INTEGER NOT NULL DEFAULT 0,
+            TotalFilled INTEGER NOT NULL DEFAULT 0,
+            Status      TEXT    NOT NULL DEFAULT '진행중'
+        );
+
         CREATE TABLE IF NOT EXISTS InspectionResults (
-            Id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            Timestamp     TEXT    NOT NULL,
-            ComponentType TEXT    NOT NULL DEFAULT '',
-            Class         TEXT    NOT NULL DEFAULT '',
-            DefectCode    TEXT    NOT NULL DEFAULT '',
-            Result        TEXT    NOT NULL DEFAULT '',
-            Confidence    REAL    NOT NULL DEFAULT 0,
-            CycleTimeMs   INTEGER NOT NULL DEFAULT 0,
-            GateUsed      INTEGER NOT NULL DEFAULT 0
+            Id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            Timestamp        TEXT    NOT NULL,
+            RecipeSessionId  INTEGER,
+            PartType         TEXT    NOT NULL DEFAULT '',
+            Classification   TEXT    NOT NULL DEFAULT '',
+            DefectCode       TEXT    NOT NULL DEFAULT '',
+            Confidence       REAL    NOT NULL DEFAULT 0,
+            GateAction       TEXT    NOT NULL DEFAULT '',
+            CycleTimeMs      INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (RecipeSessionId) REFERENCES RecipeSessions(Id)
         );
 
         CREATE TABLE IF NOT EXISTS AgvMissions (
-            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            AgvId       INTEGER NOT NULL,
-            StartTime   TEXT    NOT NULL,
-            EndTime     TEXT,
-            Source      TEXT    NOT NULL DEFAULT '',
-            Destination TEXT    NOT NULL DEFAULT '',
-            TrayClass   TEXT    NOT NULL DEFAULT '',
-            ItemCount   INTEGER NOT NULL DEFAULT 0,
-            Status      TEXT    NOT NULL DEFAULT '대기'
+            Id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            AgvId           INTEGER NOT NULL,
+            StartTime       TEXT    NOT NULL,
+            EndTime         TEXT,
+            Source          TEXT    NOT NULL DEFAULT '',
+            Destination     TEXT    NOT NULL DEFAULT '',
+            RecipeSessionId INTEGER,
+            Status          TEXT    NOT NULL DEFAULT '대기',
+            FOREIGN KEY (RecipeSessionId) REFERENCES RecipeSessions(Id)
         );
 
         CREATE TABLE IF NOT EXISTS SystemEvents (
@@ -51,12 +62,14 @@ def init_db():
             Message   TEXT NOT NULL DEFAULT ''
         );
 
-        CREATE INDEX IF NOT EXISTS ix_inspection_timestamp ON InspectionResults (Timestamp);
-        CREATE INDEX IF NOT EXISTS ix_inspection_class     ON InspectionResults (Class);
-        CREATE INDEX IF NOT EXISTS ix_inspection_gate      ON InspectionResults (GateUsed);
-        CREATE INDEX IF NOT EXISTS ix_agv_id               ON AgvMissions (AgvId);
-        CREATE INDEX IF NOT EXISTS ix_event_timestamp      ON SystemEvents (Timestamp);
-        CREATE INDEX IF NOT EXISTS ix_event_type           ON SystemEvents (EventType);
+        CREATE INDEX IF NOT EXISTS ix_inspection_timestamp      ON InspectionResults (Timestamp);
+        CREATE INDEX IF NOT EXISTS ix_inspection_classification ON InspectionResults (Classification);
+        CREATE INDEX IF NOT EXISTS ix_inspection_part_type      ON InspectionResults (PartType);
+        CREATE INDEX IF NOT EXISTS ix_inspection_session        ON InspectionResults (RecipeSessionId);
+        CREATE INDEX IF NOT EXISTS ix_agv_id                    ON AgvMissions (AgvId);
+        CREATE INDEX IF NOT EXISTS ix_agv_session               ON AgvMissions (RecipeSessionId);
+        CREATE INDEX IF NOT EXISTS ix_event_timestamp           ON SystemEvents (Timestamp);
+        CREATE INDEX IF NOT EXISTS ix_event_type                ON SystemEvents (EventType);
     """)
 
     conn.commit()
