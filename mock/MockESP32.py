@@ -64,6 +64,15 @@ def handle(conn, addr):
                         }
                         conn.send((json.dumps(ack) + "\n").encode())
                         logger.info(f"응답: {ack}")
+                    elif msg_type == "tray_cmd":
+                        ack = {
+                            "type": "tray_ack",
+                            "action": msg.get("action"),
+                            "status": "ok",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        conn.send((json.dumps(ack) + "\n").encode())
+                        logger.info(f"응답: {ack}")
                 except json.JSONDecodeError:
                     pass
     except OSError:

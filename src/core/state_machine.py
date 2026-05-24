@@ -37,11 +37,12 @@ DEBOUNCE_SEC = config.get("sensor", {}).get("debounce_sec", 0.5)
 
 
 class State(Enum):
-    IDLE          = "IDLE"
-    RUNNING       = "RUNNING"
-    TRAY_TRANSFER = "TRAY_TRANSFER"
-    COMPLETE      = "COMPLETE"
-    ERROR         = "ERROR"
+    IDLE           = "IDLE"
+    RUNNING        = "RUNNING"
+    TRAY_TRANSFER  = "TRAY_TRANSFER"
+    COMPLETE       = "COMPLETE"
+    ERROR          = "ERROR"
+    EMERGENCY_STOP = "EMERGENCY_STOP"
 
 
 class VisiPickStateMachine:
@@ -49,7 +50,8 @@ class VisiPickStateMachine:
         self.state       = State.IDLE
         self.cycle       = 0
         self._session_id = None
-        self._running    = True
+        self._running        = True
+        self._stop_requested = threading.Event()
 
         # 센서 디바운스
         self._last_trigger = 0.0
@@ -77,12 +79,34 @@ class VisiPickStateMachine:
         self._robot  = Robot()
         self._agv    = get_agv_manager()
 
-        # MQTT — WPF 브로드캐스트
+        # MQTT — WPF 브로드캐스트 + 제어 명령 구독
         self._mqtt = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        self._mqtt.on_message = self._on_mqtt_cmd
         self._mqtt.connect(BROKER, MQTT_PORT)
+        self._mqtt.subscribe("visipick/system/cmd")
         self._mqtt.loop_start()
 
         logger.info("VisiPickStateMachine 초기화 완료")
+
+    # ── MQTT 제어 명령 수신 ────────────────────────────────────
+    def _on_mqtt_cmd(self, client, userdata, msg):
+        try:
+            data = json.loads(msg.payload.decode())
+            if data.get("action") == "stop":
+                self._emergency_stop()
+        except Exception:
+            pass
+
+    def _emergency_stop(self):
+        if self._stop_requested.is_set():
+            return
+        logger.warning("비상정지 요청")
+        self._stop_requested.set()
+        self._serial.set_conveyor_speed(0.0)
+        with self._gate_lock:
+            self._gate_queue.clear()
+        self._transition(State.EMERGENCY_STOP)
+        self._publish_event("System", "WARN", "비상정지 실행")
 
     # ── 센서 트리거 (public — serial_ctrl 콜백으로 연결 예정) ────
     def on_sensor_triggered(self):
@@ -199,6 +223,9 @@ class VisiPickStateMachine:
         if not ok:
             raise RuntimeError("로봇 트레이 이송 실패")
 
+        self._serial.advance_tray()
+        self._publish_event("Conveyor", "INFO", "컨2 전진 — 다음 트레이 투입")
+
         agv_id = (self.cycle % AGV_COUNT) + 1
         self._agv.dispatch(agv_id, source=AGV_START,
                            recipe_session_id=self._session_id)
@@ -229,7 +256,7 @@ class VisiPickStateMachine:
         if DUMMY_MODE:
             self._start_dummy_trigger()
 
-        while self.cycle < TOTAL_CYCLES:
+        while self.cycle < TOTAL_CYCLES and not self._stop_requested.is_set():
             self.cycle += 1
             logger.info(f"{'='*40}")
             logger.info(f"사이클 {self.cycle}/{TOTAL_CYCLES} — 레시피 세션 시작")
@@ -238,20 +265,21 @@ class VisiPickStateMachine:
 
             try:
                 # 레시피 완성까지 게이트 큐만 처리 — 검사는 센서 트리거가 구동
-                while not self._recipe.is_complete():
+                while not self._recipe.is_complete() and not self._stop_requested.is_set():
                     self._flush_gate_queue()
                     time.sleep(0.05)
 
+                if self._stop_requested.is_set():
+                    break
+
                 logger.info(f"레시피 완성: {self._recipe.status()}")
-                self._serial.set_conveyor_speed(0.0)   # 컨베이어 정지
-                self._tray_transfer()
+                self._tray_transfer()          # 컨1은 계속 운행, 컨2가 다음 트레이 투입
                 self._transition(State.COMPLETE)
                 logger.info(f"사이클 {self.cycle} 완료!")
                 time.sleep(1)
 
-                if self.cycle < TOTAL_CYCLES:
+                if self.cycle < TOTAL_CYCLES and not self._stop_requested.is_set():
                     self._transition(State.RUNNING)
-                    self._serial.set_conveyor_speed(CONVEYOR_SPEED)
 
             except Exception as e:
                 self._transition(State.ERROR)

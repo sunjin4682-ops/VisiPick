@@ -54,7 +54,7 @@ def judge(part_type, defect_result, recipe_state) -> str:
     return "NEEDED"                                            # 통과 → 트레이
 ```
 
-## DIP IC 레시피
+## DIP IC 레시피(현재는 IC칩, 방열판, 터미널블록, 커패시터를 쓰고 부품 변경은 계획중)
 
 | # | 부품 | 패키지 | 식별 방법 |
 |---|------|--------|-----------|

@@ -192,6 +192,15 @@ def conveyor_stop():
     mqtt_client.publish("visipick/conveyor/cmd", json.dumps({"action": "stop"}))
     return {"result": "stopped"}
 
+@app.post("/api/emergency_stop", tags=["제어"])
+def emergency_stop():
+    """비상정지 — 컨베이어·게이트 큐 즉시 정지, state_machine EMERGENCY_STOP 전이"""
+    mqtt_client.publish("visipick/system/cmd", json.dumps({
+        "action":    "stop",
+        "timestamp": datetime.now().isoformat(),
+    }))
+    return {"result": "emergency_stop_requested"}
+
 # =====================
 # REST API — 시스템 이벤트
 # =====================

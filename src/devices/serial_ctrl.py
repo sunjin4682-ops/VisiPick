@@ -72,8 +72,12 @@ class SerialController:
         return self._send({"type": "gate_cmd", "gate": str(gate_id), "action": "push", "timestamp": _now()})
 
     def set_conveyor_speed(self, speed_cm_per_s: float) -> bool:
-        """컨베이어 속도 설정 (cm/s). 0.0 이면 정지."""
+        """컨1(메인 컨베이어) 속도 설정 (cm/s). 0.0 이면 정지."""
         return self._send({"type": "conveyor_cmd", "action": "set_speed", "speed": speed_cm_per_s, "timestamp": _now()})
+
+    def advance_tray(self) -> bool:
+        """컨2(트레이 컨베이어) 한 칸 전진 — 다음 빈 트레이 투입."""
+        return self._send({"type": "tray_cmd", "action": "advance", "timestamp": _now()})
 
     def _send(self, msg: dict) -> bool:
         try:
