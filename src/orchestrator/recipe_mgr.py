@@ -4,7 +4,7 @@ from src.utils.config_loader import config
 
 logger = setup_logger("recipe_mgr")
 
-PARTS = config["recipe"]["parts"]  # ["NE555P", "CD4017BE", "ATmega328P", "74HC595N"]
+PARTS = config["recipe"]["parts"]  # ["IC칩", "터미널블록", "방열판", "커패시터"]
 
 
 class RecipeManager:

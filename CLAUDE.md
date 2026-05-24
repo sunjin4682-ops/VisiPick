@@ -168,7 +168,7 @@ powershell scripts/backup.ps1
   "serial":   { "port": "COM8", "baudrate": 115200 },
   "robot":    { "host": "192.168.0.47", "port": 9002, "speed": 80 },
   "mqtt":     { "broker": "localhost", "port": 1883 },
-  "recipe":   { "parts": ["NE555P", "CD4017BE", "ATmega328P", "74HC595N"] },
+  "recipe":   { "parts": ["IC칩", "터미널블록", "방열판", "커패시터"] },
   "database": { "path": "C:\\VisiPick\\data\\visipick.db",
                 "retention_days_inspection": 30,
                 "retention_days_events": 7 }
@@ -217,14 +217,14 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 | AGV MQTT 미수신 | AGV ESP32-CAM Wi-Fi + Mosquitto 브로커 연결 확인 |
 | 한글 깨짐 | `logger.py` UTF-8 래핑 확인 |
 | ImportError: src.utils… | 실행 디렉토리가 `C:\VisiPick` 인지 확인 |
-| 게이트 타이밍 오차 | `config["conveyor"]["gate1_delay_ms"]` 실측 후 조정 |
+| 게이트 타이밍 오차 | `config["gates"]["1"]["delay_sec"]` 실측 후 조정 (카메라→게이트 거리 / 컨베이어 속도) |
 
 ## 현재 상태 (업데이트 시 이 섹션만 수정)
 
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `main`
-- 마지막 커밋: `f830499`
+- 마지막 커밋: `ed39fe6` (feat: V6.3 전면 구현)
 
 ### 설계 버전
 - **V6.3** (2026-05-22 반영)
@@ -235,14 +235,19 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ SQLite DB 레이어 (`src/core/db.py`) — V6.3 스키마
 - ✅ AGV MQTT 매니저 (`src/core/agv_mqtt.py`)
 - ✅ Mock Publisher (`mock_publisher.py` — WPF 독립 개발용)
-- ✅ `config/config.json` V6.3 키 구조
+- ✅ `config/config.json` V6.3 키 구조 + 게이트 타이밍 실측값 (Gate1: 20.0s, Gate2: 30.0s)
 - ✅ `src/utils/db_init.py` — RecipeSessions 포함 4 테이블
 - ✅ `src/vision/` — `classifier.py`, `defect_detector.py`, `camera_top.py`, `camera_side.py` (더미 모드)
 - ✅ `src/orchestrator/` — `decision.py`, `recipe_mgr.py`, `tray_mgr.py`
-- ✅ `src/devices/` — `robot.py`, `serial_ctrl.py`
+- ✅ `src/devices/` — `robot.py`, `serial_ctrl.py` (센서 콜백 수신 루프 포함)
+- ✅ `state_machine.py` — 센서 트리거 기반 FSM, 게이트 지연 큐, 컨베이어 제어
+- ✅ `mock/MockESP32.py` — sensor_triggered 자동 발행 + conveyor_cmd 응답
+- ✅ 더미 모드 end-to-end 2사이클 테스트 PASS (2026-05-23)
 - 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
 ### 다음 작업
 - [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어)
 - [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어)
-- [ ] `state_machine.py` — orchestrator/vision/devices 모듈과 통합 (현재 state_machine은 독립 더미)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+- [ ] `config["gates"]["1/2"]["delay_sec"]` 정밀 실측 (현재 20.0/30.0은 이론값)

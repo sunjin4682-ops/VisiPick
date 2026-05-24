@@ -473,10 +473,12 @@ C:\VisiPick\
 
 ##### config/config.json — V6.3 구조 재작성
 - `cameras` (top/side 2카메라), `conveyor`, `recipe` 섹션 신규 추가
-- `gates`: A/B/C 3개 → `"1"/"2"` 푸셔 게이트 2개
-- `robot`: mock TCP 분리 → `host: "192.168.0.47"` (RPi4 실제 IP)
+- `recipe.parts`: IC칩/터미널블록/방열판/커패시터 → NE555P/CD4017BE/ATmega328P/74HC595N (DIP IC 모델명으로 변경)
+- `gates`: A/B/C 3개 → `"1"/"2"` 푸셔 게이트 2개 (`open_angle/close_angle` → `push_angle/return_angle`)
+- `robot`: port/baudrate/positions 전체 → `host: "192.168.0.47"`, `port`, `speed`로 단순화 (TCP 방식으로 전환)
 - `agv.nodes`: `warehouse_A/B/C` → 단일 `warehouse: "WAREHOUSE"`
 - Mock 호스트/포트 → `mock.esp32/robot/agv` 하위로 통합
+- MQTT topics prefix: `factory/visipick/` → `visipick/`
 
 ##### DB 스키마 V6.3 (`src/utils/db_init.py`, `src/core/db.py`)
 - `InspectionResults`: ComponentType/Class/Result/GateUsed → PartType/Classification/GateAction/RecipeSessionId
@@ -489,7 +491,7 @@ C:\VisiPick\
 ##### src/vision/ 패키지 신규 구현
 | 파일 | 내용 |
 |------|------|
-| `classifier.py` | DIP IC 4종 분류 — 더미: PARTS 랜덤 선택 |
+| `classifier.py` | 부품 4종 분류 — `config["recipe"]["parts"]` 참조, 더미: 랜덤 선택 |
 | `defect_detector.py` | 불량 검출 (Camera1+2) — 더미: 15% 확률 BENT_PIN/BROKEN |
 | `camera_top.py` | Camera1 상부 캡처 — 더미: None 반환, 실제: cv2.VideoCapture |
 | `camera_side.py` | Camera2 측면 캡처 — 더미: None 반환, 실제: cv2.VideoCapture |
@@ -520,7 +522,8 @@ C:\VisiPick\
 - 신규: `/api/sessions`, `/api/sessions/current`, `/api/agv/status`, `/api/agv/missions`
 
 ##### src/core/vision_service.py — 더미 데이터 V6.3
-- DUMMY_COMPONENTS: NE555P/CD4017BE/ATmega328P/74HC595N, NEEDED/DUPLICATE/DEFECT, PASS_THROUGH/GATE1_PUSH/GATE2_PUSH
+- DUMMY_COMPONENTS: 부품명 IC칩/터미널블록/방열판/커패시터 → NE555P/CD4017BE/ATmega328P/74HC595N으로 교체
+- 분류 조합: NEEDED/DUPLICATE/DEFECT × PASS_THROUGH/GATE1_PUSH/GATE2_PUSH
 
 ---
 
@@ -545,6 +548,162 @@ C:\VisiPick\
 - 기존 state_machine.py가 TCP 직접 호출하던 방식을 모두 devices/orchestrator 모듈로 위임
 - state_machine은 FSM 흐름 제어 + MQTT 브로드캐스트만 담당
 - 더미 모드: config.json의 `vision.dummy_mode: true` 하나로 전체 제어
+
+---
+
+## 2026-05-22 (4차)
+
+### 완료된 작업 ✅
+
+#### state_machine.py 센서 트리거 기반 리팩터링
+
+**문제 3가지 해결:**
+
+| 문제 | 기존 | 변경 후 |
+|------|------|---------|
+| 루프 모델 | `sleep(4s)` 후 PC가 직접 검사 호출 — 부품 누락 가능 | 투입단 센서 트리거 → `on_sensor_triggered()` → 데몬 스레드 |
+| 게이트 타이밍 | 판정 즉시 `push_gate()` — 엉뚱한 부품 밀어냄 | `_schedule_gate(delay_sec)` 지연 큐 → `_flush_gate_queue()` 50ms 주기 소진 |
+| 컨베이어 미구동 | 제어 없음 | RUNNING 진입 시 `set_conveyor_speed(1.5)`, 이재 직전 `set_conveyor_speed(0.0)` |
+
+**추가된 메서드/속성:**
+
+| 항목 | 내용 |
+|------|------|
+| `on_sensor_triggered()` | public 콜백 (serial_ctrl에서 연결). 디바운스 0.5초, RUNNING 상태에서만 처리 |
+| `_inspect_lock` | `threading.Lock()` — 이전 검사가 끝나기 전 새 트리거 무시 |
+| `_gate_queue` | `deque[(fire_at, gate_no)]` — 지연 게이트 예약 목록 |
+| `_schedule_gate(gate_no, delay_sec)` | `fire_at = now + delay_sec` 을 큐에 적재 |
+| `_flush_gate_queue()` | `fire_at <= now` 항목만 소진하여 `push_gate()` 실행 |
+| `_start_dummy_trigger()` | 더미 모드 전용 — 별도 스레드에서 `on_sensor_triggered()` 주기 호출 |
+
+**더미 모드:** `config["vision"]["dummy_mode"]=true` 이면 `_start_dummy_trigger()` 가 실제 센서 없이 동작 유지
+
+---
+
+#### config/config.json — 게이트/센서 타이밍 파라미터 추가
+
+```json
+"gates": {
+  "1": { ..., "delay_sec": 1.5 },
+  "2": { ..., "delay_sec": 1.5 },
+  "pusher_hold_sec": 0.3
+},
+"sensor": { "debounce_sec": 0.5 }
+```
+
+- `delay_sec`: 카메라 → 게이트 구간 이동 시간 (실측 후 조정, 기본 1.5s)
+- `pusher_hold_sec`: 푸셔 동작 유지 시간 (ESP32 측에서 사용)
+- `debounce_sec`: 동일 부품 중복 트리거 무시 기간
+
+---
+
+#### serial_ctrl.py — 센서 콜백 수신 루프 추가
+
+| 항목 | 내용 |
+|------|------|
+| `__init__(on_sensor: Callable \| None = None)` | 콜백 파라미터 추가 — 더미 모드에서는 무시 |
+| `_send_lock` | `threading.Lock()` — `_send()`와 수신 루프의 `readline()` 충돌 방지 |
+| `_start_recv_loop()` | 10ms 폴링, `in_waiting > 0` 확인 후 readline, `{"type":"sensor_triggered"}` 수신 시 콜백 호출 |
+| `_send()` | 실제 모드에서 `with self._send_lock:` 으로 감쌈 |
+
+**연결 방식 (state_machine.py):**
+```python
+self._serial = SerialController(on_sensor=self.on_sensor_triggered)
+```
+
+ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `state_machine.on_sensor_triggered()` → 디바운스 → 검사 스레드 → 판정 → `_schedule_gate()` → `_flush_gate_queue()` → `push_gate()`
+
+---
+
+### 진행 중인 작업 🔄
+
+- 없음 (2026-05-22 4차 전체 완료)
+
+---
+
+### 다음 할 일
+
+- [ ] MockESP32.py에 `{"type":"sensor_triggered"}` 자동 발행 추가 (더미 → 실제 흐름 검증용)
+- [ ] `config["gates"]["1"]["delay_sec"]` 실측값 입력 (박은수 — 카메라~게이트 거리/속도 측정)
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어 연결 후)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어 연결 후)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+
+---
+
+### 설계 결정 사항 📌
+
+#### 센서 트리거 동시성 설계
+- `_inspect_lock.acquire(blocking=False)` — 이전 검사 진행 중에는 새 트리거 즉시 반환 (드롭)
+- 드롭 이유: 컨베이어 속도 1.5cm/s, 부품 간격 최소 4초 → 실제로 동시 검사 상황 없음. lock 충돌은 센서 오작동 신호 차단용
+
+#### 게이트 큐 lock 설계
+- 큐 적재(`_schedule_gate`)와 소진(`_flush_gate_queue`)은 별도 스레드에서 실행 가능 → `_gate_lock` 으로 보호
+- 소진은 메인 루프(50ms 주기)에서만 수행 → 단일 호출자이므로 `push_gate()` 는 lock 밖에서 실행
+
+#### serial_ctrl lock 설계
+- `_send()` 와 수신 루프가 동일 시리얼 포트 `readline()` 을 공유 → lock 없으면 ACK 응답을 수신 루프가 탈취
+- `in_waiting > 0` 체크 후 `readline()` → lock 보유 시간 최소화 (블로킹 없음)
+- `reset_input_buffer()` 가 큐에 쌓인 센서 이벤트를 삭제할 수 있으나, gate_cmd 레이턴시(수ms) 동안 부품이 도달할 확률 극히 낮음
+
+---
+
+## 2026-05-23
+
+### 완료된 작업 ✅
+
+#### 게이트 타이밍 실측값 적용 (`config/config.json`)
+- 컨베이어 속도 1.5cm/s, 카메라~Gate1 30cm, 카메라~Gate2 45cm 실측
+- Gate1 `delay_sec`: 1.5 → **20.0s** (30 ÷ 1.5)
+- Gate2 `delay_sec`: 1.5 → **30.0s** (45 ÷ 1.5)
+- 근거 수치(`camera_to_gate1_cm: 30`, `camera_to_gate2_cm: 45`) conveyor 섹션에 함께 기록
+
+#### MockESP32.py 개선 (`mock/MockESP32.py`)
+| 항목 | 내용 |
+|------|------|
+| `_sensor_trigger_loop()` | 연결마다 데몬 스레드 실행 — `SENSOR_INTERVAL`(=`vision.dummy_interval_sec`)초 주기로 `sensor_triggered` 발행 |
+| `stop_event` | 클라이언트 연결 종료 시 루프 정상 중단 |
+| `conveyor_cmd` 핸들러 추가 | 기존에 없어 `set_conveyor_speed()` 호출마다 10초 타임아웃 발생 → `conveyor_ack` 응답 추가 |
+| `SO_REUSEADDR` | 프로세스 재시작 시 "Address already in use" 방지 |
+| 수신 파싱 | `splitlines()` 루프로 변경 (멀티 메시지 안전 처리) |
+
+#### 더미 모드 end-to-end 테스트 (2사이클 PASS)
+- 실행: `python -m src.core.state_machine` (루트에서 모듈 실행 필수 — 아래 이슈 참고)
+- 전체 흐름 확인: IDLE → RUNNING → (센서 트리거 → 검사 → 3클래스 판정 → 게이트 큐 예약) → TRAY_TRANSFER → COMPLETE × 2사이클
+- AGV 교번 정상 확인: 사이클1 → AGV 2, 사이클2 → AGV 1
+- DB 저장 확인: RecipeSessions Id=1,2 생성·완료, InspectionResults 전 검사 결과 저장
+
+#### 부품 종류 원복 (V6.3 구현 시 변경됐던 이름 → 원래 이름으로 복원)
+- `NE555P / CD4017BE / ATmega328P / 74HC595N` → `IC칩 / 터미널블록 / 방열판 / 커패시터`
+- 수정 파일: `config/config.json`, `src/vision/classifier.py`, `src/core/vision_service.py`, `src/orchestrator/recipe_mgr.py`
+- `config["recipe"]["parts"]`만 바꾸면 classifier·recipe_mgr·state_machine 자동 반영 (vision_service.py만 별도 수정)
+
+---
+
+### 설계 확인 사항 📌
+
+#### 게이트 큐 사이클 간 유지 — 의도된 동작
+- 사이클 전환 시 게이트 큐를 비우지 않는 것이 맞음
+- 논스톱 컨베이어이므로 레시피 완성 시점에 이미 카메라를 통과한 DUPLICATE/DEFECT 부품이 컨베이어 위에 존재
+- `fire_at` = 카메라 통과 시각 + delay_sec → 사이클이 바뀌어도 해당 절대 시각에 게이트 작동해야 함
+
+---
+
+### 다음 할 일
+
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어 연결 후)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어 연결 후)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+- [ ] `config["gates"]["1/2"]["delay_sec"]` 값 정밀 실측 (현재 20.0/30.0은 이론값)
+
+---
+
+### 이슈 및 주의사항 ⚠️
+
+- **실행 명령 수정**: `python src/core/state_machine.py` 직접 실행 시 `ModuleNotFoundError: No module named 'src'` 발생 — 스크립트 실행 시 `src/core`가 sys.path에 추가되어 루트 패키지를 찾지 못함. **반드시 `python -m src.core.state_machine`으로 실행**
+- `gate1_delay_ms`, `gate2_delay_ms` (conveyor 섹션) 는 현재 미사용 — `gates["1"]["delay_sec"]`이 실제 사용 값
 
 ---
 

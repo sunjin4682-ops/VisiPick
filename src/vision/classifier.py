@@ -14,7 +14,7 @@ class Classifier:
     def classify(self, frame=None) -> str:
         """
         frame: cv2 이미지 (더미 모드에서는 None 허용)
-        반환: "NE555P" | "CD4017BE" | "ATmega328P" | "74HC595N"
+        반환: "IC칩" | "터미널블록" | "방열판" | "커패시터"
         """
         if DUMMY_MODE:
             result = random.choice(PARTS)

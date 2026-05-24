@@ -12,7 +12,9 @@
   "conveyor": {
     "speed_cm_per_s": 1.5,
     "gate1_delay_ms": 0,
-    "gate2_delay_ms": 0
+    "gate2_delay_ms": 0,
+    "camera_to_gate1_cm": 30,
+    "camera_to_gate2_cm": 45
   },
 
   "serial": {
@@ -21,8 +23,13 @@
   },
 
   "gates": {
-    "1": { "servo_pin": 13, "push_angle": 90, "return_angle": 0, "delay_ms": 500 },
-    "2": { "servo_pin": 27, "push_angle": 90, "return_angle": 0, "delay_ms": 500 }
+    "1": { "servo_pin": 13, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 20.0 },
+    "2": { "servo_pin": 27, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 30.0 },
+    "pusher_hold_sec": 0.3
+  },
+
+  "sensor": {
+    "debounce_sec": 0.5
   },
 
   "robot": {
@@ -43,7 +50,7 @@
   },
 
   "recipe": {
-    "parts": ["NE555P", "CD4017BE", "ATmega328P", "74HC595N"]
+    "parts": ["IC칩", "터미널블록", "방열판", "커패시터"]
   },
 
   "mock": {
