@@ -707,6 +707,58 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 ---
 
+## 2026-05-24
+
+### 완료된 작업 ✅
+
+#### 비상정지 구현 (`state_machine.py`, `api_server.py`)
+
+**흐름:** WPF 정지버튼 → `POST /api/emergency_stop` → MQTT `visipick/system/cmd {action:stop}` → `state_machine._emergency_stop()`
+
+| 항목 | 내용 |
+|------|------|
+| `State.EMERGENCY_STOP` | State enum에 추가 |
+| `_stop_requested` | `threading.Event()` — 비상정지 신호 플래그 |
+| MQTT 구독 | `__init__`에서 `visipick/system/cmd` 구독, `on_message = _on_mqtt_cmd` |
+| `_on_mqtt_cmd()` | `action=stop` 수신 시 `_emergency_stop()` 호출 |
+| `_emergency_stop()` | `set_conveyor_speed(0.0)` + `gate_queue.clear()` + `EMERGENCY_STOP` 상태 전이 + WPF 이벤트 발행 |
+| `run()` 루프 | 외부 while + 내부 while + 사이클 재시작 3곳에 `not _stop_requested.is_set()` 체크 |
+| `POST /api/emergency_stop` | `api_server.py`에 신규 엔드포인트 추가 |
+
+- 로봇 이재 중(`TRAY_TRANSFER`) 정지 신호는 플래그만 세팅 — 이재 완료 후 루프 탈출 (하드웨어 손상 방지)
+
+#### 컨1 비정지 운행 + 컨2 트레이 자동 전진 (`state_machine.py`, `serial_ctrl.py`, `mock/MockESP32.py`)
+
+**변경 전:** 레시피 완성 → `set_conveyor_speed(0.0)` → 이재 → `set_conveyor_speed(1.5)` 재시작
+**변경 후:** 컨1은 시스템 시작 시 1회만 시작, 이후 비정지. 로봇 이재 완료 후 컨2가 다음 빈 트레이 투입
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `state_machine.py` | 레시피 완성 시 `set_conveyor_speed(0.0)` 제거, 사이클 재시작 시 속도 재설정 제거 |
+| `state_machine._tray_transfer()` | `robot.transfer_tray()` 완료 후 `self._serial.advance_tray()` 호출 |
+| `serial_ctrl.py` | `advance_tray()` 신규 — `tray_cmd {action: advance}` → ESP32 전송 |
+| `mock/MockESP32.py` | `tray_cmd` 수신 시 `tray_ack` 응답 추가 |
+
+---
+
+### 설계 확인 사항 📌
+
+- `serial_ctrl.py`는 MQTT를 전혀 구독하지 않음 — state_machine이 명령을 받아 serial_ctrl을 호출하는 구조
+- `api_server.py`와 `state_machine.py`는 별도 프로세스 (터미널 2개). MQTT로 간접 연결
+- 비상정지 시 게이트 큐 전체 클리어 — 컨베이어 위 잔류 부품 게이트 동작 취소
+
+---
+
+### 다음 할 일
+
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어 연결 후)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어 연결 후)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+- [ ] `config["gates"]["1/2"]["delay_sec"]` 값 정밀 실측 (현재 20.0/30.0은 이론값)
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD
