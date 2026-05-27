@@ -195,8 +195,8 @@ from src.utils.logger import setup_logger
 logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ```
 
-- 콘솔: 색상 코딩 (UTF-8 — Windows CP949 래핑 적용)
-- 파일: 00:00 일별 롤링, 30일 보존
+- 콘솔: 색상 코딩 (UTF-8 — `reconfigure(encoding='utf-8')` 적용, isatty 보존)
+- 파일: 00:00 일별 롤링, 30일 보존, `colorize=False` 명시
 
 ## 코딩 규칙
 
@@ -215,7 +215,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 | MQTT connection refused | `docker-compose -f config/docker-compose.yml up -d` |
 | myCobot timeout | `config["robot"]` host/port 확인 (RPi4 IP) |
 | AGV MQTT 미수신 | AGV ESP32-CAM Wi-Fi + Mosquitto 브로커 연결 확인 |
-| 한글 깨짐 | `logger.py` UTF-8 래핑 확인 |
+| 한글 깨짐 | `logger.py` — `sys.stdout/stderr.reconfigure(encoding='utf-8')` 호출 여부 확인 |
 | ImportError: src.utils… | 실행 디렉토리가 `C:\VisiPick` 인지 확인 |
 | 게이트 타이밍 오차 | `config["gates"]["1"]["delay_sec"]` 실측 후 조정 (카메라→게이트 거리 / 컨베이어 속도) |
 
@@ -224,7 +224,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `main`
-- 마지막 커밋: `d9046eb` (docs: 2026-05-24 작업 로그 추가 — 비상정지, 컨1 비정지 운행)
+- 마지막 커밋: `88bb19f` (chore: add requirements.txt)
 
 ### 설계 버전
 - **V6.3** (2026-05-22 반영)
@@ -243,6 +243,8 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ `state_machine.py` — 센서 트리거 기반 FSM, 게이트 지연 큐, 비상정지(`State.EMERGENCY_STOP`), 컨1 비정지 운행
 - ✅ `mock/MockESP32.py` — sensor_triggered 자동 발행 + conveyor_cmd / tray_cmd 응답
 - ✅ 더미 모드 end-to-end 2사이클 테스트 PASS (2026-05-23)
+- ✅ `src/utils/logger.py` — 파일 로그 포맷 버그(`{{...}}`) 수정 + `reconfigure()` 기반 UTF-8 인코딩 안정화 (2026-05-27)
+- ✅ Mock 환경 전체 플로우 재검증 PASS — IDLE→RUNNING→TRAY_TRANSFER→COMPLETE 사이클 확인 (2026-05-27)
 - 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
 ### 다음 작업

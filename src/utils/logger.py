@@ -2,11 +2,21 @@ import sys
 import io
 from loguru import logger
 
-# Windows CP949 콘솔 → UTF-8 (모듈 최초 로드 시 한 번만 교체)
-if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
+# Windows CP949 → UTF-8: reconfigure()로 기존 fd를 보존하며 인코딩만 교체
+# (io.TextIOWrapper 재생성은 isatty() 정보를 잃어 colorize가 무시됨)
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is None:
+            continue
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, io.UnsupportedOperation):
+            # Python < 3.7 또는 reconfigure 미지원 스트림 → TextIOWrapper로 대체
+            if hasattr(_stream, "buffer"):
+                _name = "stdout" if _stream is sys.stdout else "stderr"
+                setattr(sys, _name, io.TextIOWrapper(
+                    _stream.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                ))
 
 
 def setup_logger(name: str):
@@ -21,10 +31,11 @@ def setup_logger(name: str):
 
     logger.add(
         f"logs/{name}-{{time:YYYY-MM-DD}}.log",
-        format="{{time:YYYY-MM-DD HH:mm:ss.SSS}} | {{level:8}} | {{name}} | {{message}}",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:8} | {name} | {message}",
         rotation="00:00",
         retention="30 days",
         encoding="utf-8",
+        colorize=False,
         level="DEBUG",
     )
 

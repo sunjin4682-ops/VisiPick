@@ -759,6 +759,63 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 ---
 
+## 2026-05-27
+
+### 완료된 작업 ✅
+
+#### Mock 환경 전체 실행 테스트 + logger.py 버그 2건 수정
+
+##### 실행 순서 확립
+- docker-compose로 Mosquitto 이미지 최초 pull 및 컨테이너 기동 확인 (`visipick-mqtt`)
+- Mock 서버 3개 백그라운드 실행 후 `PYTHONPATH=C:\VisiPick` 설정하여 `state_machine.py` 실행
+- `python src/core/state_machine.py` 직접 실행 시 `ModuleNotFoundError` — **반드시 `PYTHONPATH` 설정 또는 `python -m src.core.state_machine` 사용**
+
+##### 버그 1 — 로그 파일 포맷 미적용 (`src/utils/logger.py`)
+| 항목 | 내용 |
+|------|------|
+| 증상 | `logs/*.log` 파일에 `{time:YYYY-MM-DD HH:mm:ss.SSS} \| {level:8} \| {name} \| {message}` 텍스트가 그대로 반복 기록됨 |
+| 원인 | `logger.add(..., format="{{time:...}} \| {{level:...}} \| ...")` — 일반 문자열에서 `{{`는 loguru 이스케이프이므로 리터럴 `{time:...}`이 출력됨 |
+| 수정 | 이중 중괄호 → 단일 중괄호: `format="{time:YYYY-MM-DD HH:mm:ss.SSS} \| {level:8} \| {name} \| {message}"` |
+
+##### 버그 2 — Windows 한글 인코딩 깨짐 (`src/utils/logger.py`)
+| 항목 | 내용 |
+|------|------|
+| 증상 | 콘솔/로그 파일에서 한글이 `?쒖옉`, `?붾?` 등으로 출력됨 |
+| 원인 | `io.TextIOWrapper` 재생성 방식 — 새 객체로 교체하면 `isatty()` 정보가 손실되어 loguru `colorize=True` 무시, stderr 미처리 |
+| 수정 | Python 3.7+ `stream.reconfigure(encoding='utf-8', errors='replace')` 사용 (기존 fd 보존, isatty 유지). stdout·stderr 둘 다 처리. 파일 핸들러에 `colorize=False` 명시 추가. fallback: `io.TextIOWrapper` (Python < 3.7) |
+
+##### Mock 환경 전체 플로우 검증 (PASS)
+| 단계 | 결과 |
+|------|------|
+| IDLE → RUNNING 전이 | ✅ |
+| 더미 센서 트리거 (3s 주기) | ✅ MockESP32 `sensor_triggered` 발행 + `conveyor_ack` 응답 |
+| 3클래스 판정 | ✅ NEEDED / DUPLICATE / DEFECT(BROKEN) 모두 정상 |
+| 레시피 4종 완성 감지 | ✅ 4개 수집 후 TRAY_TRANSFER 전이 |
+| myCobot 트레이 이재 | ✅ MockMyCobot 정상 응답 |
+| AGV 출발 (N1 → WAREHOUSE) | ✅ MockAGV 정상 응답 |
+| TRAY_TRANSFER → COMPLETE → RUNNING | ✅ 사이클 1 완료 후 사이클 2 시작 |
+| DB 저장 | ✅ RecipeSessions, InspectionResults 전 결과 저장 |
+| 로그 파일 한글 | ✅ `2026-05-27 18:31:10.789 \| INFO \| __main__ \| Logger 시작 [test]` |
+
+---
+
+### 다음 할 일
+
+- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어)
+- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
+- [ ] `tests/auto_test.py` 50사이클 정식 실행
+- [ ] `config["gates"]["1/2"]["delay_sec"]` 정밀 실측 (현재 20.0/30.0은 이론값)
+
+---
+
+### 이슈 및 주의사항 ⚠️
+
+- `PYTHONPATH=C:\VisiPick` 설정 없이 `python src/core/state_machine.py` 실행 시 `ModuleNotFoundError: No module named 'src'` — `python -m src.core.state_machine` 또는 환경변수 설정 필수
+- `Get-Content logs/*.log` 시 `-Encoding UTF8` 옵션 필요 (PowerShell 기본값 CP949)
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD
