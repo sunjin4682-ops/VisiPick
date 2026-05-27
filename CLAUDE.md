@@ -224,24 +224,24 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `main`
-- 마지막 커밋: `ed39fe6` (feat: V6.3 전면 구현)
+- 마지막 커밋: `d9046eb` (docs: 2026-05-24 작업 로그 추가 — 비상정지, 컨1 비정지 운행)
 
 ### 설계 버전
 - **V6.3** (2026-05-22 반영)
 - V6.2 대비: 푸셔 게이트 2개, 2단계 검사(상부+측면), 중력 수집, 트레이 단위 이재, MQTT AGV, Python 단일 마스터
 
 ### 구현 상태
-- ✅ FastAPI + WebSocket (`src/api/api_server.py`)
+- ✅ FastAPI + WebSocket (`src/api/api_server.py`) — `POST /api/emergency_stop` 포함
 - ✅ SQLite DB 레이어 (`src/core/db.py`) — V6.3 스키마
 - ✅ AGV MQTT 매니저 (`src/core/agv_mqtt.py`)
-- ✅ Mock Publisher (`mock_publisher.py` — WPF 독립 개발용)
+- ✅ Mock Publisher (`mock/mock_publisher.py` — WPF 독립 개발용)
 - ✅ `config/config.json` V6.3 키 구조 + 게이트 타이밍 실측값 (Gate1: 20.0s, Gate2: 30.0s)
 - ✅ `src/utils/db_init.py` — RecipeSessions 포함 4 테이블
 - ✅ `src/vision/` — `classifier.py`, `defect_detector.py`, `camera_top.py`, `camera_side.py` (더미 모드)
 - ✅ `src/orchestrator/` — `decision.py`, `recipe_mgr.py`, `tray_mgr.py`
-- ✅ `src/devices/` — `robot.py`, `serial_ctrl.py` (센서 콜백 수신 루프 포함)
-- ✅ `state_machine.py` — 센서 트리거 기반 FSM, 게이트 지연 큐, 컨베이어 제어
-- ✅ `mock/MockESP32.py` — sensor_triggered 자동 발행 + conveyor_cmd 응답
+- ✅ `src/devices/` — `robot.py`, `serial_ctrl.py` (센서 콜백 수신 루프 + `advance_tray()` 포함)
+- ✅ `state_machine.py` — 센서 트리거 기반 FSM, 게이트 지연 큐, 비상정지(`State.EMERGENCY_STOP`), 컨1 비정지 운행
+- ✅ `mock/MockESP32.py` — sensor_triggered 자동 발행 + conveyor_cmd / tray_cmd 응답
 - ✅ 더미 모드 end-to-end 2사이클 테스트 PASS (2026-05-23)
 - 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
