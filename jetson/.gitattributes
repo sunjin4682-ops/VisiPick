@@ -1,0 +1,2 @@
+# 셸 스크립트는 항상 LF — Jetson/Linux에서 CRLF면 실행 실패(`bad interpreter: ^M`)
+*.sh text eol=lf

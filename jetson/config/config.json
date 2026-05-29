@@ -1,0 +1,86 @@
+{
+  "vision": {
+    "dummy_mode": true,
+    "dummy_interval_sec": 3,
+    "device": "cuda"
+  },
+
+  "cameras": {
+    "top":  { "index": 0, "width": 1920, "height": 1080, "fps": 90 },
+    "side": { "index": 1 }
+  },
+
+  "conveyor": {
+    "speed_cm_per_s": 1.5,
+    "gate1_delay_ms": 0,
+    "gate2_delay_ms": 0,
+    "camera_to_gate1_cm": 30,
+    "camera_to_gate2_cm": 45
+  },
+
+  "serial": {
+    "port": "/dev/ttyUSB0",
+    "baudrate": 115200
+  },
+
+  "gates": {
+    "1": { "servo_pin": 13, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 20.0 },
+    "2": { "servo_pin": 27, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 30.0 },
+    "pusher_hold_sec": 0.3
+  },
+
+  "sensor": {
+    "debounce_sec": 0.5
+  },
+
+  "robot": {
+    "host": "192.168.0.47",
+    "port": 9002,
+    "speed": 80,
+    "dummy_mode": true
+  },
+
+  "agv": {
+    "count": 2,
+    "speed": 50,
+    "dummy_mode": true,
+    "nodes": {
+      "start":     "N1",
+      "warehouse": "WAREHOUSE"
+    }
+  },
+
+  "recipe": {
+    "parts": ["IC칩", "터미널블록", "방열판", "커패시터"]
+  },
+
+  "mock": {
+    "esp32": { "host": "localhost", "port": 9001 },
+    "robot": { "host": "localhost", "port": 9002 },
+    "agv":   { "host": "localhost", "port": 9003 }
+  },
+
+  "mqtt": {
+    "broker": "localhost",
+    "port": 1883,
+    "topics": {
+      "inspection":   "visipick/inspection",
+      "robot_cmd":    "visipick/robot/cmd",
+      "agv_status":   "visipick/agv/{id}/status",
+      "system_event": "visipick/system/event",
+      "gate_cmd":     "visipick/gate/cmd"
+    }
+  },
+
+  "database": {
+    "path": "/home/jetson/VisiPick/data/visipick.db",
+    "retention_days_inspection": 30,
+    "retention_days_events": 7
+  },
+
+  "system": {
+    "heartbeat_interval_sec": 2,
+    "log_dir": "logs",
+    "demo_cycles": 50
+  }
+}

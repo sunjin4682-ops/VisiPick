@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# VisiPick — Jetson Orin Nano Super (JetPack 6.2.1 / Ubuntu 22.04 / ARM64 / CUDA)
+#   설치:  pip install -r jetson/requirements-jetson.txt
+#
+# ⚠️ 아래 패키지는 이 파일로 설치하지 말 것 — Jetson 전용 처리 필요 (수동 설치):
+#
+#   [OpenCV]
+#     JetPack에 CUDA 빌드 cv2가 이미 포함됨.  pip opencv-python 설치 금지(충돌).
+#     확인:  python3 -c "import cv2; print(cv2.__version__, cv2.cuda.getCudaEnabledDeviceCount())"
+#
+#   [PyTorch / torchvision]
+#     PyPI 일반 휠 금지(ARM64+CUDA 미지원).  NVIDIA Jetson 전용 휠(JetPack 6.x/cu12x) 사용.
+#     NVIDIA 공식 안내:  https://developer.nvidia.com/embedded/downloads
+#     예) NVIDIA pip 인덱스 또는 제공 .whl 파일:
+#       pip install --no-cache-dir torch torchvision --index-url <jetson-wheel-index>
+#     설치 후 확인:  python3 -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+#   [ultralytics]
+#     위 torch 설치 후, torch를 다시 끌어오지 않도록 의존성 무시로 설치:
+#       pip install --no-deps ultralytics
+#     (ultralytics가 요구하는 나머지 순수 파이썬 의존성은 개별 설치)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 순수 Python 패키지 — pip로 그대로 설치 (아키텍처 무관)
+fastapi==0.136.1
+uvicorn==0.47.0
+paho-mqtt==2.1.0
+loguru==0.7.3
+pyserial==3.5
+pymycobot
+
+# numpy/pandas: JetPack의 cv2/torch와 ABI 충돌 우려가 있으면 버전 고정을 풀고
+# 시스템에 맞춰 설치할 것. 충돌 없으면 아래 버전 사용 가능.
+numpy==2.4.4
+pandas==3.0.2
