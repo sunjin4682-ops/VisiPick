@@ -1,10 +1,12 @@
-import json, threading
+import json, threading, asyncio as _asyncio
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import paho.mqtt.client as mqtt
 import uvicorn
 from src.utils.config_loader import config
+from src.core import frame_bus
 from src.core.db import (
     get_inspections, get_inspections_search,
     get_stats, get_events,
@@ -88,6 +90,41 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_clients.remove(websocket)
+
+# =====================
+# 영상 — MJPEG 스트림 (V6.4: 영상=MJPEG, 제어 채널과 분리)
+# =====================
+STREAM_FPS = config.get("stream", {}).get("fps", 10)
+_BOUNDARY = "frame"
+
+async def _mjpeg_generator(name: str):
+    """프레임 버스의 최신 JPEG 를 multipart/x-mixed-replace 로 연속 송출."""
+    interval = 1.0 / max(STREAM_FPS, 1)
+    while True:
+        jpeg = frame_bus.read_jpeg(name)
+        if jpeg:
+            yield (b"--" + _BOUNDARY.encode() + b"\r\n"
+                   b"Content-Type: image/jpeg\r\n"
+                   b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                   + jpeg + b"\r\n")
+        await _asyncio.sleep(interval)
+
+@app.get("/video/{name}", tags=["영상"])
+def video_stream(name: str):
+    """카메라 MJPEG 스트림. name = top(상부) | side(측면).
+    WPF/브라우저의 <Image>/<img> src 로 바로 사용."""
+    return StreamingResponse(
+        _mjpeg_generator(name),
+        media_type=f"multipart/x-mixed-replace; boundary={_BOUNDARY}",
+    )
+
+@app.get("/snapshot/{name}", tags=["영상"])
+def snapshot(name: str):
+    """카메라 최신 1프레임(JPEG). 스냅샷/썸네일용."""
+    jpeg = frame_bus.read_jpeg(name)
+    if not jpeg:
+        return Response(status_code=503, content=b"no frame")
+    return Response(content=jpeg, media_type="image/jpeg")
 
 # =====================
 # REST API — 시스템 상태

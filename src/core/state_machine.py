@@ -18,6 +18,7 @@ from src.devices.robot import Robot
 from src.devices.serial_ctrl import SerialController
 from src.core.agv_mqtt import get_manager as get_agv_manager
 from src.core.db import save_inspection, save_recipe_session, complete_recipe_session
+from src.core import frame_bus
 
 logger = setup_logger("statemachine")
 
@@ -235,6 +236,9 @@ class VisiPickStateMachine:
                 "cycle_time_ms":     cycle_ms,
             }
 
+            # 프레임 버스에 최신 검사 프레임 발행 (api_server MJPEG 송출용)
+            self._publish_frames(frame_top, frame_side, cls, top, confidence)
+
             save_inspection(payload)
             self._publish("visipick/inspection", payload)
             self._publish_event(
@@ -244,6 +248,21 @@ class VisiPickStateMachine:
             logger.info(f"[검사] {part_type} | {cls} | {defect} | {action} | {cycle_ms}ms")
         finally:
             self._inspect_lock.release()
+
+    # ── 프레임 버스 발행 (MJPEG 송출용) ───────────────────────
+    def _publish_frames(self, frame_top, frame_side, cls, top, conf):
+        """검사 프레임에 ASCII 라벨만 가볍게 얹어 frame_bus 에 발행.
+        (바운딩 박스 오버레이가 필요하면 live_yolo --publish 경로 사용 — 연속·박스 포함)"""
+        if frame_top is not None:
+            import cv2
+            color = (0, 0, 255) if cls == "DEFECT" else \
+                    (0, 165, 255) if cls == "DUPLICATE" else (0, 200, 0)
+            label = f"{top.get('raw_class', '?')} {cls} {conf:.2f}"
+            cv2.putText(frame_top, label, (10, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            frame_bus.publish("top", frame_top)
+        if frame_side is not None:
+            frame_bus.publish("side", frame_side)
 
     # ── 트레이 이송 + AGV 출발 ────────────────────────────────
     def _tray_transfer(self):

@@ -141,6 +141,8 @@ def main():
                     help="모델이 뱉는 '모든' 박스를 콘솔 출력+화면 표시 (불량 클래스 가려짐 확인용)")
     ap.add_argument("--square", action="store_true",
                     help="프레임 중앙을 정사각형 크롭 후 추론 (학습셋 512x512 기하에 맞춤)")
+    ap.add_argument("--publish", metavar="NAME", default="",
+                    help="주석 프레임을 frame_bus 에 연속 발행 (NAME=top/side). api_server MJPEG 송출용")
     args = ap.parse_args()
 
     clf = Classifier()  # config.vision (dummy_mode=false → YOLO best.pt 로드)
@@ -178,6 +180,10 @@ def main():
             line = f"[{n:5d}] {tag or '':24s} part={str(top['part']):14s} " \
                    f"hint={top['verdict_hint']:7s} conf={top['confidence']:.2f}  ({fps:4.1f} fps)"
             print(line)
+
+            if args.publish:                 # frame_bus 연속 발행 → api_server MJPEG
+                from src.core import frame_bus
+                frame_bus.publish(args.publish, frame)
 
             if args.save:
                 if writer is None:

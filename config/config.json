@@ -54,6 +54,12 @@
     "side": { "index": 1 }
   },
 
+  "stream": {
+    "dir": "data/stream",
+    "jpeg_quality": 70,
+    "fps": 10
+  },
+
   "conveyor": {
     "speed_cm_per_s": 1.5,
     "gate1_delay_ms": 0,
