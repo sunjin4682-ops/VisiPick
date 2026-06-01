@@ -13,25 +13,25 @@ INTERVAL = config["vision"]["dummy_interval_sec"]
 
 DUMMY_COMPONENTS = [
     # IC칩
-    {"part_type": "IC칩",     "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
-    {"part_type": "IC칩",     "classification": "DEFECT",    "defect_code": "BENT_PIN", "gate_action": "GATE2_PUSH"},
-    {"part_type": "IC칩",     "classification": "DEFECT",    "defect_code": "BROKEN", "gate_action": "GATE2_PUSH"},
-    {"part_type": "IC칩",     "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
+    {"part_type": "IC",     "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
+    {"part_type": "IC",     "classification": "DEFECT",    "defect_code": "BENT_PIN", "gate_action": "GATE2_PUSH"},
+    {"part_type": "IC",     "classification": "DEFECT",    "defect_code": "BROKEN", "gate_action": "GATE2_PUSH"},
+    {"part_type": "IC",     "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
     # 터미널블록
-    {"part_type": "터미널블록",   "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
-    {"part_type": "터미널블록",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
-    {"part_type": "터미널블록",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
-    {"part_type": "터미널블록",   "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
+    {"part_type": "TerminalBlock",   "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
+    {"part_type": "TerminalBlock",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
+    {"part_type": "TerminalBlock",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
+    {"part_type": "TerminalBlock",   "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
     # 방열판
-    {"part_type": "방열판", "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
-    {"part_type": "방열판", "classification": "DEFECT",    "defect_code": "BENT_PIN", "gate_action": "GATE2_PUSH"},
-    {"part_type": "방열판", "classification": "DEFECT",    "defect_code": "BROKEN", "gate_action": "GATE2_PUSH"},
-    {"part_type": "방열판", "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
+    {"part_type": "Heatsink", "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
+    {"part_type": "Heatsink", "classification": "DEFECT",    "defect_code": "BENT_PIN", "gate_action": "GATE2_PUSH"},
+    {"part_type": "Heatsink", "classification": "DEFECT",    "defect_code": "BROKEN", "gate_action": "GATE2_PUSH"},
+    {"part_type": "Heatsink", "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
     # 커패시터
-    {"part_type": "커패시터",   "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
-    {"part_type": "커패시터",   "classification": "DEFECT",    "defect_code": "BENT_PIN",   "gate_action": "GATE2_PUSH"},
-    {"part_type": "커패시터",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
-    {"part_type": "커패시터",   "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
+    {"part_type": "Capacitor",   "classification": "NEEDED",    "defect_code": "NONE",     "gate_action": "PASS_THROUGH"},
+    {"part_type": "Capacitor",   "classification": "DEFECT",    "defect_code": "BENT_PIN",   "gate_action": "GATE2_PUSH"},
+    {"part_type": "Capacitor",   "classification": "DEFECT",    "defect_code": "BROKEN",   "gate_action": "GATE2_PUSH"},
+    {"part_type": "Capacitor",   "classification": "DUPLICATE", "defect_code": "NONE",     "gate_action": "GATE1_PUSH"},
 ]
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
