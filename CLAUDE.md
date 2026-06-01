@@ -11,7 +11,7 @@
 | MQTT (Mosquitto) | AGV 통신 + 내부 이벤트 브로드캐스트 |
 | FastAPI + WebSocket | HMI 통신 (:8000) |
 | SQLite WAL | 데이터 영속성 (4 테이블) |
-| USB Serial → ESP32 | 게이트 푸셔(Gate1·Gate2) + 컨1 스텝모터 |
+| USB Serial → ESP32 | 게이트 푸셔(Gate1·Gate2) + 컨1 스텝모터 + 컨2 중복반환 + 컨3 트레이공급 |
 | Ethernet TCP → RPi4 | myCobot 트레이 이재 제어 (pymycobot) |
 
 ## 시스템 전체 흐름
@@ -24,19 +24,25 @@
 Camera1(상부): 종류 식별 + 레시피 매칭 + 1차 불량
 Camera2(측면): 핀 휘어짐/들뜨 정밀 검사
         ↓
-┌─ DUPLICATE → Gate1 푸셔 → 반환 bin
+┌─ DUPLICATE → Gate1 푸셔 → 컨2(중복 부품 반환 컨베이어)
 ├─ DEFECT    → Gate2 푸셔 → Reject bin
-└─ NEEDED    → 통과 → 컨1 끝단 낙하
+└─ NEEDED    → 통과 → 컨1 끝단 낙하 → 트레이 수집
                       ↓
-             [컨2 트레이 대기열]
              레시피 4종 충족?
                       ↓ YES
-             [myCobot: 완성 트레이 → AGV]
+             [myCobot: 완성 트레이 → AGV] + 컨3(다음 빈 트레이 공급)
                       ↓
              [AGV → 창고 → 지게(서보 25°) 쏟아내기]
 
 [Python Central Server + C# WPF HMI + SQLite]
 ```
+
+### 컨베이어 3종 역할
+| # | 모터 | 역할 |
+|---|------|------|
+| 컨1 | 스텝모터(PUL14/DIR12) | 메인 검사 라인 — 부품이 카메라 밑을 Non-stop 통과, 게이트로 분류 (cm/s 제어) |
+| 컨2 | A모터(L9110S 26/27) | 중복 부품 반환 — 채우는 트레이에 이미 있는 중복(DUPLICATE) 부품을 돌려보냄 (상시 ON) |
+| 컨3 | B모터(L9110S 32/33) | 다음 빈 트레이 공급 — 트레이가 찰 때마다 다음 빈 트레이를 수집 위치로 이동 (`tray_cmd` → 2초) |
 
 | Phase | 담당 모듈 | 통신 |
 |-------|-----------|------|
@@ -223,8 +229,8 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
-- 브랜치: `main`
-- 마지막 커밋: `88bb19f` (chore: add requirements.txt)
+- 브랜치: `feat/jetson-migration`
+- 마지막 커밋: `bdc637e` (feat: Jetson 이식 파일 분리)
 
 ### 설계 버전
 - **V6.3** (2026-05-22 반영)
@@ -238,6 +244,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ `config/config.json` V6.3 키 구조 + 게이트 타이밍 실측값 (Gate1: 20.0s, Gate2: 30.0s)
 - ✅ `src/utils/db_init.py` — RecipeSessions 포함 4 테이블
 - ✅ `src/vision/` — `classifier.py`, `defect_detector.py`, `camera_top.py`, `camera_side.py` (더미 모드)
+- ✅ Camera1(상부) 실제 YOLO 파이프라인 — `best.pt` 7클래스(F1 0.97), `camera_util.py` 공통화로 라이브뷰·production 동일 처리(DSHOW+노출+정사각 크롭), fps 개선(imgsz 416) (2026-06-01)
 - ✅ `src/orchestrator/` — `decision.py`, `recipe_mgr.py`, `tray_mgr.py`
 - ✅ `src/devices/` — `robot.py`, `serial_ctrl.py` (센서 콜백 수신 루프 + `advance_tray()` 포함)
 - ✅ `state_machine.py` — 센서 트리거 기반 FSM, 게이트 지연 큐, 비상정지(`State.EMERGENCY_STOP`), 컨1 비정지 운행
@@ -248,8 +255,8 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
 ### 다음 작업
-- [ ] Camera1 상부 OpenCV 분류 파이프라인 (실제 하드웨어)
-- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어)
+- [ ] imgsz=416 에서 약한 클래스(부서진 칩/휜 핀) 검출 유지 확인 (저하 시 512 상향 또는 재학습)
+- [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어) — `camera_util.py` 재활용
 - [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
 - [ ] `tests/auto_test.py` 50사이클 정식 실행
 - [ ] `config["gates"]["1/2"]["delay_sec"]` 정밀 실측 (현재 20.0/30.0은 이론값)

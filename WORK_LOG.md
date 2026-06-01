@@ -727,10 +727,10 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 - 로봇 이재 중(`TRAY_TRANSFER`) 정지 신호는 플래그만 세팅 — 이재 완료 후 루프 탈출 (하드웨어 손상 방지)
 
-#### 컨1 비정지 운행 + 컨2 트레이 자동 전진 (`state_machine.py`, `serial_ctrl.py`, `mock/MockESP32.py`)
+#### 컨1 비정지 운행 + 컨3 트레이 자동 공급 (`state_machine.py`, `serial_ctrl.py`, `mock/MockESP32.py`)
 
 **변경 전:** 레시피 완성 → `set_conveyor_speed(0.0)` → 이재 → `set_conveyor_speed(1.5)` 재시작
-**변경 후:** 컨1은 시스템 시작 시 1회만 시작, 이후 비정지. 로봇 이재 완료 후 컨2가 다음 빈 트레이 투입
+**변경 후:** 컨1은 시스템 시작 시 1회만 시작, 이후 비정지. 로봇 이재 완료 후 컨3가 다음 빈 트레이 공급
 
 | 파일 | 변경 내용 |
 |------|-----------|
@@ -813,6 +813,110 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 - `PYTHONPATH=C:\VisiPick` 설정 없이 `python src/core/state_machine.py` 실행 시 `ModuleNotFoundError: No module named 'src'` — `python -m src.core.state_machine` 또는 환경변수 설정 필수
 - `Get-Content logs/*.log` 시 `-Encoding UTF8` 옵션 필요 (PowerShell 기본값 CP949)
+
+---
+
+## 2026-05-30
+
+> **이날 목표:** ESP32 펌웨어 ↔ Python 마스터 시리얼 통합, 컨베이어 역할 정정, 비상정지 범위 확대, 죽은 config 정리
+
+### 완료된 작업 ✅
+
+#### ESP32 펌웨어 ↔ serial_ctrl JSON 프로토콜 정합 (`Hardware-Connect/esp32/esp32.ino`)
+펌웨어가 텍스트 명령(`GATE1:PUSH`)만 파싱하고 응답에 `status`가 없어 Python 마스터와 통신 불가였던 것을 정정.
+- ArduinoJson(v7)으로 JSON 명령 파싱 추가: `gate_cmd` / `conveyor_cmd` / `tray_cmd` / `ping`
+- 모든 JSON 응답에 `"status":"ok"` + `type` 포함 (serial_ctrl `_send()`의 성공 판정 기준)
+- 부품 감지 시 `{"end_sensor":true}` → `{"type":"sensor_triggered"}` 송신으로 변경 (촬영 트리거)
+- 컨베이어 속도 10~100 정수 → cm/s 실수 처리(`MM_PER_STEP` 캘리브레이션, 0.0=정지)
+- 주기 status 송신 기본 OFF(`ENABLE_PERIODIC_STATUS 0`) + 헬퍼 함수 무음화 → PC의 "1명령-1응답 readline" 모델 보호
+- 텍스트 프로토콜은 수동 시리얼 모니터 테스트용 폴백으로 유지
+
+#### 컨베이어 속도/정지 버그 (`esp32.ino`)
+- `setConvSpeedCm()`의 불필요한 `setAcceleration()` 제거 (runSpeed 모드에서 무시됨)
+- `stopConveyor()`의 `stepper.stop()` 제거 — 위치제어(run)용 함수라 runSpeed 모드에서 상태 꼬임 → 2번째 사이클부터 컨베이어 미동작 유발. `setSpeed(0)`만으로 충분
+
+#### 컨베이어 3종 역할 정정 (문서 + 코드)
+실제 역할 확정: 컨1=메인 검사, **컨2(A모터, 상시 ON)=중복 부품 반환**, **컨3(B모터, tray_cmd 2초)=다음 빈 트레이 공급**.
+이전에 "컨3=반환"으로 잘못 가정해 넣었던 내용 전부 정정.
+
+| 파일 | 변경 |
+|------|------|
+| `serial_ctrl.py` | `run_return_conveyor()` → `advance_tray()` 복원, docstring "컨3=다음 빈 트레이 공급" |
+| `state_machine.py` | `_tray_transfer()` 호출부·이벤트·주석 "컨3 다음 빈 트레이 공급"으로 정정 |
+| `esp32.ino` | CONV2 주석 "중복 부품 반환(상시 ON)", CONV3 "다음 빈 트레이 공급(2초)" |
+| `CLAUDE.md` | 시스템 흐름도 정정 + **컨베이어 3종 역할 표** 신규 |
+| `WORK_LOG.md` | 730·733행 "컨2 트레이 전진" → "컨3 트레이 공급" 용어 정정 |
+
+> 부수 효과: 팀 분석의 🔴"tray_cmd 실동작 불일치(치명)"는 실제 버그 아님으로 판명(`advance_tray`→컨3→다음 트레이 공급이 의도대로 동작). 🔴"컨2 PC제어 없음"도 컨2=중복반환은 상시 ON이 맞는 설계라 해소.
+
+### 진행 중 / 사용자 직접 적용 예정 🔄
+
+#### 비상정지 시 컨2도 정지 (위치만 전달, 사용자 적용)
+펌웨어 `emergencyStop()`이 컨1·게이트만 멈추고 컨2/컨3은 안 멈췄음. 또한 `emergencyStop()`이 어느 명령에도 연결 안 된 죽은 함수였음.
+- `esp32.ino`: `emergencyStop()`에 `conv2Stop()` + 컨3 정지 추가, `parseJsonCommand`에 `emergency_stop` 핸들러 추가(응답 `estop_ack status:ok`)
+- `serial_ctrl.py`: `emergency_stop()` 메서드 신규 (`{"type":"emergency_stop"}`)
+- `state_machine.py`: `_emergency_stop()`에서 `set_conveyor_speed(0.0)` → `emergency_stop()`
+- `mock/MockESP32.py`: `emergency_stop` 응답 추가
+→ WPF `/api/emergency_stop` → MQTT → state_machine → ESP32가 컨1·컨2·컨3·게이트 일괄 정지
+
+#### 죽은 config 정리 (위치만 전달, 사용자 적용)
+딜레이는 `conveyor.camera_to_gate_cm / speed_cm_per_s`로 계산(state_machine.py:35-36)하므로 아래는 아무도 안 읽는 dead config:
+- `conveyor.gate1_delay_ms`, `gate2_delay_ms` (config.json 14·15행)
+- `gates."1"/"2".delay_sec`, `delay_ms` (27·28행)
+- (선택) `gates.push_angle/return_angle/pusher_hold_sec` — 서보값은 펌웨어가 단일 진실 → `gates` 블록 통째 삭제 가능
+
+### 다음 할 일 (api_server 배치 — 미적용, 합의 필요)
+- [ ] **[#7 치명]** start/stop 수신부 부재: `api_server`가 `visipick/vision/cmd`·`conveyor/cmd` publish하나 `state_machine`은 `system/cmd`만 구독 → 시작/정지 무동작. (a)구독확장 추천
+- [ ] `on_mqtt_message` 매 수신마다 `asyncio.new_event_loop()` 생성 → `run_coroutine_threadsafe`로 메인루프 재사용
+- [ ] WebSocket `/ws` 양방향 → 수신(broadcast) 전용으로 고정 (REST 우회 차단)
+- [ ] CORS `allow_origins=["*"]` 데모 한정 주석
+
+### 이슈 및 주의사항 ⚠️
+- COM 포트는 한 번에 한 프로그램만 점유 — Python 테스트 시 Arduino IDE Serial Monitor 닫기
+- ESP32 `END_SENSOR`(GPIO34)는 입력전용이라 내부 풀업 불가 → **외부 풀업 저항(10kΩ→3V3) 필수**. TCRT5000 active-high면 `updateEndSensor()`의 `!digitalRead` 부호 반전 제거
+- ArduinoJson은 **v7** 설치 (v6와 API 다름)
+
+---
+
+## 2026-06-01
+
+> **이날 목표:** 노트북(실구동기)으로 비전 작업 이관 — 재진단 → 라이브뷰 튜닝(크롭/노출)을 production 에 반영 → fps 개선
+
+### 완료된 작업 ✅
+
+#### 노트북 재진단 (데스크탑과 사양 다름)
+- GPU: **CUDA False (CPU only)** — Intel CPU 추론
+- ELP 카메라 인덱스: 노트북에선 **0번** (데스크탑 노트엔 1번으로 적혀 있었음). `config.cameras.top.index` 이미 0 — 수정 불필요. 라이브뷰는 `--source 0` 사용
+- 추론 속도: imgsz=640 기준 ~148ms(이후 측정 편차 있음). imgsz 416은 640 대비 ~2.7배 빠름 확인
+
+#### 라이브뷰 화면 처리 → production 반영 (도메인 갭 해소)
+튜닝용 `tools/live_yolo.py`만 정사각 크롭+노출 적용하고, 실제 `camera_top.py`(state_machine 이 쓰는 경로)는 16:9 원본+자동노출이라 **튜닝이 실전에 안 먹히던 문제** 정정.
+
+| 파일 | 변경 |
+|------|------|
+| `src/vision/camera_util.py` | **신규** — 공통 모듈. `open_top_camera()`(DSHOW+config.controls 노출/게인/화벨), `center_square()`(중앙 정사각 크롭). 라이브뷰·production 이 같은 함수 사용 → 갈라짐 방지 |
+| `src/vision/camera_top.py` | `open_top_camera()` 사용으로 DSHOW+노출 설정 적용 + `square_crop` 시 `center_square()` 크롭. 이제 라이브뷰와 동일 화면 |
+| `tools/live_yolo.py` | 중복 로직(`_apply_camera_controls`·`_center_square`) 제거 → `camera_util` 재사용 |
+| `config/config.json` | `cameras.top.square_crop: true` 추가 (크롭 on/off 단일 스위치) |
+
+#### fps 개선 (config 만 수정)
+| 키 | 전 → 후 | 효과 |
+|----|---------|------|
+| `cameras.top.width/height` | 1920×1080 → **1280×720** | 디코드·표시 가벼움 |
+| `cameras.top.fps` | 90 → **60** | 1280p 현실 캡처레이트 |
+| `vision.yolo_imgsz` | 640 → **416** | 추론 ~2.7배 (체감 fps 가장 크게 개선) |
+
+→ 실사용 반응 빨라짐 확인. 정확도 저하 우려되면 imgsz 512로 한 단계만 상향(640 복귀는 느림).
+
+### 다음 할 일
+- [ ] imgsz=416 에서 약한 클래스(부서진 칩/휜 핀) 검출 유지되는지 실사용 확인
+- [ ] Camera2(측면) 핀 검사 파이프라인 — `camera_side.py`+`pin_inspector.py` (방금 만든 `camera_util` 재활용 가능)
+- [ ] 실 카메라로 state_machine end-to-end 검증
+- [ ] false negative 지속 시 현장 샘플로 재학습 (`tools/retrain.py`, Pinbent/Broken 보강)
+
+### 이슈 및 주의사항 ⚠️
+- 이 노트북은 GPU 없음 → CPU 추론. 끊김 심하면 imgsz 추가 하향 또는 OpenVINO 변환 검토
+- 표시 해상도(1280×720)는 검출 정확도와 무관 — 추론은 크롭 후 imgsz 로 리사이즈됨
 
 ---
 

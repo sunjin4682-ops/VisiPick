@@ -1,13 +1,16 @@
 from src.utils.logger import setup_logger
 from src.utils.config_loader import config
+from src.vision.camera_util import center_square, open_top_camera
 
 logger = setup_logger("camera_top")
 
 DUMMY_MODE = config["vision"]["dummy_mode"]
-CAM_INDEX  = config["cameras"]["top"]["index"]
-WIDTH      = config["cameras"]["top"]["width"]
-HEIGHT     = config["cameras"]["top"]["height"]
-FPS        = config["cameras"]["top"]["fps"]
+CAM_TOP    = config["cameras"]["top"]
+CAM_INDEX  = CAM_TOP["index"]
+WIDTH      = CAM_TOP["width"]
+HEIGHT     = CAM_TOP["height"]
+FPS        = CAM_TOP["fps"]
+SQUARE     = CAM_TOP.get("square_crop", False)   # 학습셋(정사각) 기하에 맞춤 — 라이브뷰 --square 와 동일
 
 
 class CameraTop:
@@ -18,14 +21,12 @@ class CameraTop:
         if DUMMY_MODE:
             logger.info("Camera1(상부) 더미 모드")
             return
-        import cv2
-        self._cap = cv2.VideoCapture(CAM_INDEX)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        self._cap.set(cv2.CAP_PROP_FPS, FPS)
+        # DSHOW 백엔드 + config.controls(노출/게인/화벨) 적용 — 라이브뷰와 동일 경로
+        self._cap = open_top_camera(CAM_TOP)
         if not self._cap.isOpened():
             raise RuntimeError(f"Camera1(상부) 열기 실패: index={CAM_INDEX}")
-        logger.info(f"Camera1(상부) 초기화 완료: {WIDTH}x{HEIGHT}@{FPS}fps")
+        logger.info(f"Camera1(상부) 초기화 완료: {WIDTH}x{HEIGHT}@{FPS}fps"
+                    f"{' (정사각 크롭)' if SQUARE else ''}")
 
     def capture(self):
         """프레임 캡처. 더미 모드: None 반환."""
@@ -35,6 +36,8 @@ class CameraTop:
         if not ret:
             logger.warning("Camera1 프레임 캡처 실패")
             return None
+        if SQUARE:                       # 학습셋(512x512 정사각) 기하에 맞춤
+            frame = center_square(frame)
         return frame
 
     def release(self):

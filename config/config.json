@@ -1,11 +1,56 @@
 {
   "vision": {
-    "dummy_mode": true,
-    "dummy_interval_sec": 3
+    "dummy_mode": false,
+    "dummy_interval_sec": 3,
+
+    "mode": "yolo",
+    "yolo_model_path": "models/best.pt",
+    "yolo_conf": 0.35,
+    "yolo_iou": 0.4,
+    "yolo_imgsz": 416,
+    "min_conf": 0.40,
+
+    "yolo_class_map": {
+      "IC":      { "part": "IC",            "verdict": "PASS" },
+      "CAP":     { "part": "Capacitor",     "verdict": "PASS" },
+      "HS":      { "part": "Heatsink",      "verdict": "PASS" },
+      "TB":      { "part": "TerminalBlock", "verdict": "PASS" },
+      "Broken":  { "verdict": "REJECT" },
+      "Dented":  { "verdict": "REJECT" },
+      "Pinbent": { "verdict": "REJECT" }
+    },
+
+    "yolo_class_index": {
+      "0": "Broken", "1": "CAP", "2": "Dented", "3": "HS",
+      "4": "IC", "5": "Pinbent", "6": "TB"
+    },
+    "defect_iou_threshold": 0.3,
+    "defect_min_conf": 0.35,
+
+    "pin_inspector": {
+      "canny_low": 50,
+      "canny_high": 150,
+      "blur_ksize": 5,
+      "expected_pin_count": { "IC": 14, "TerminalBlock": 6, "Heatsink": 0, "Capacitor": 2 },
+      "pin_gap_tolerance_pct": 30,
+      "tip_y_tolerance_px": 10
+    }
   },
 
   "cameras": {
-    "top":  { "index": 0, "width": 1920, "height": 1080, "fps": 90 },
+    "top":  {
+      "index": 0, "width": 1280, "height": 720, "fps": 60,
+      "fourcc": "MJPG",
+      "square_crop": true,
+      "controls": {
+        "_comment": "형광등(현재): 벨트 1.5cm/s로 느려 노출 길어도 블러 미미. -5(~31ms)로 밝게. 더 어두우면 -4(62ms). LED 추가 후: exposure -9~-10 으로 낮추고 gain 0~10 으로 줄일 것.",
+        "auto_exposure": 0.25,
+        "exposure": -5,
+        "gain": 40,
+        "auto_wb": 0,
+        "wb_temperature": 4500
+      }
+    },
     "side": { "index": 1 }
   },
 
@@ -19,12 +64,13 @@
 
   "serial": {
     "port": "COM8",
-    "baudrate": 115200
+    "baudrate": 115200,
+    "dummy_mode": false
   },
 
   "gates": {
-    "1": { "servo_pin": 13, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 20.0 },
-    "2": { "servo_pin": 27, "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 30.0 },
+    "1": { "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 20.0 },
+    "2": { "push_angle": 90, "return_angle": 0, "delay_ms": 500, "delay_sec": 30.0 },
     "pusher_hold_sec": 0.3
   },
 
@@ -36,7 +82,7 @@
     "host": "192.168.0.47",
     "port": 9002,
     "speed": 80,
-    "dummy_mode": true
+    "dummy_mode": false
   },
 
   "agv": {
