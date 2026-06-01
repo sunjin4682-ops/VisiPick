@@ -6,7 +6,7 @@ from src.utils.config_loader import config
 
 logger = setup_logger("serial_ctrl")
 
-DUMMY_MODE  = config["vision"]["dummy_mode"]
+DUMMY_MODE  = config["serial"]["dummy_mode"]
 SERIAL_PORT = config["serial"]["port"]
 SERIAL_BAUD = config["serial"]["baudrate"]
 ESP32_HOST  = config["mock"]["esp32"]["host"]
@@ -76,8 +76,14 @@ class SerialController:
         return self._send({"type": "conveyor_cmd", "action": "set_speed", "speed": speed_cm_per_s, "timestamp": _now()})
 
     def advance_tray(self) -> bool:
-        """컨2(트레이 컨베이어) 한 칸 전진 — 다음 빈 트레이 투입."""
+        """컨3(다음 빈 트레이 공급 컨베이어) 2초 구동 — 트레이가 찰 때마다 다음 빈 트레이를 수집 위치로 이동.
+        펌웨어: tray_cmd → B모터(CONV3_A/B) 2초 ON 후 자동 정지."""
         return self._send({"type": "tray_cmd", "action": "advance", "timestamp": _now()})
+    
+    def emergency_stop(self) -> bool:
+        """비상정지 — 컨1·컨2·컨3·게이트 전체 정지 (펌웨어 emergencyStop())."""
+        return self._send({"type": "emergency_stop", "timestamp": _now()})
+
 
     def _send(self, msg: dict) -> bool:
         try:

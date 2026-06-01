@@ -73,6 +73,14 @@ def handle(conn, addr):
                         }
                         conn.send((json.dumps(ack) + "\n").encode())
                         logger.info(f"응답: {ack}")
+                    elif msg_type == "emergency_stop":
+                        ack = {
+                            "type": "estop_ack",
+                            "status": "ok",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        conn.send((json.dumps(ack) + "\n").encode())
+                        logger.info(f"응답: {ack}")
                 except json.JSONDecodeError:
                     pass
     except OSError:

@@ -1,4 +1,4 @@
-import time, json, random, threading
+import time, json, threading
 from collections import deque
 from datetime import datetime
 from enum import Enum
@@ -9,8 +9,9 @@ from src.utils.config_loader import config
 from src.vision.camera_top import CameraTop
 from src.vision.camera_side import CameraSide
 from src.vision.classifier import Classifier
-from src.vision.defect_detector import DefectDetector
-from src.orchestrator.decision import judge, gate_action_for
+from src.vision.pin_inspector import PinInspector
+from src.orchestrator.decision import Decision, gate_action_for, verdict_to_label, defect_code_for
+from src.utils.part_map import to_korean
 from src.orchestrator.recipe_mgr import RecipeManager
 from src.orchestrator.tray_mgr import TrayManager
 from src.devices.robot import Robot
@@ -30,9 +31,10 @@ AGV_START      = config["agv"]["nodes"]["start"]
 RECIPE_PARTS   = config["recipe"]["parts"]
 CONVEYOR_SPEED = config["conveyor"]["speed_cm_per_s"]
 
-_gates_cfg   = config.get("gates", {})
-GATE1_DELAY  = _gates_cfg.get("1", {}).get("delay_sec", 1.5)
-GATE2_DELAY  = _gates_cfg.get("2", {}).get("delay_sec", 1.5)
+_conv_cfg    = config.get("conveyor", {})
+_speed       = _conv_cfg.get("speed_cm_per_s", 1.5)
+GATE1_DELAY  = _conv_cfg.get("camera_to_gate1_cm", 30) / _speed
+GATE2_DELAY  = _conv_cfg.get("camera_to_gate2_cm", 45) / _speed
 DEBOUNCE_SEC = config.get("sensor", {}).get("debounce_sec", 0.5)
 
 
@@ -50,6 +52,7 @@ class VisiPickStateMachine:
         self.state       = State.IDLE
         self.cycle       = 0
         self._session_id = None
+        self._inspect_enabled = True
         self._running        = True
         self._stop_requested = threading.Event()
 
@@ -64,15 +67,24 @@ class VisiPickStateMachine:
         # 검사 중복 방지 (이전 검사가 끝나기 전에 새 트리거 무시)
         self._inspect_lock = threading.Lock()
 
-        # 비전
+        # 비전 (염재니 이식: 상부 분류기 + 측면 핀검사)
         self._cam_top  = CameraTop()
         self._cam_side = CameraSide()
         self._clf      = Classifier()
-        self._dd       = DefectDetector()
+        self._pin      = PinInspector()
 
         # 오케스트레이터
         self._recipe = RecipeManager()
         self._tray   = TrayManager()
+
+        # 판정 (염재니 Decision 채택, judge 폐기)
+        #  · 부호 함정: is_duplicate=True 가 '중복'. needs()=True 는 '아직 필요' 로 반대 →
+        #    반드시 not 으로 감싼다.
+        #  · 부품명: 비전은 영문, recipe.needs 는 한글 → to_korean 으로 변환 후 전달.
+        self._decider = Decision(
+            is_duplicate=lambda p: (p is not None) and (not self._recipe.needs(to_korean(p))),
+            min_conf=config["vision"].get("min_conf", 0.40),
+        )
 
         # 디바이스
         self._serial = SerialController(on_sensor=self.on_sensor_triggered)
@@ -83,7 +95,8 @@ class VisiPickStateMachine:
         self._mqtt = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self._mqtt.on_message = self._on_mqtt_cmd
         self._mqtt.connect(BROKER, MQTT_PORT)
-        self._mqtt.subscribe("visipick/system/cmd")
+        for t in ("visipick/system/cmd", "visipick/vision/cmd", "visipick/conveyor/cmd"):
+            self._mqtt.subscribe(t)
         self._mqtt.loop_start()
 
         logger.info("VisiPickStateMachine 초기화 완료")
@@ -91,9 +104,17 @@ class VisiPickStateMachine:
     # ── MQTT 제어 명령 수신 ────────────────────────────────────
     def _on_mqtt_cmd(self, client, userdata, msg):
         try:
-            data = json.loads(msg.payload.decode())
-            if data.get("action") == "stop":
+            data   = json.loads(msg.payload.decode())
+            action = data.get("action")
+            topic  = msg.topic
+            if topic == "visipick/system/cmd" and action == "stop":
                 self._emergency_stop()
+            elif topic == "visipick/vision/cmd":
+                self._inspect_enabled = (action == "start")
+                logger.info(f"비전 {'시작' if action=='start' else '중지'}")
+            elif topic == "visipick/conveyor/cmd":
+                self._serial.set_conveyor_speed(CONVEYOR_SPEED if action == "start" else 0.0)
+                logger.info(f"컨베이어 {'시작' if action=='start' else '중지'}")
         except Exception:
             pass
 
@@ -102,7 +123,7 @@ class VisiPickStateMachine:
             return
         logger.warning("비상정지 요청")
         self._stop_requested.set()
-        self._serial.set_conveyor_speed(0.0)
+        self._serial.emergency_stop()       # 컨1·컨2·컨3·게이트 전체 정지
         with self._gate_lock:
             self._gate_queue.clear()
         self._transition(State.EMERGENCY_STOP)
@@ -167,6 +188,8 @@ class VisiPickStateMachine:
 
     # ── 부품 1개 검사 (센서 트리거 → 데몬 스레드에서 실행) ────
     def _inspect_one(self):
+        if not self._inspect_enabled:
+            return
         if not self._inspect_lock.acquire(blocking=False):
             logger.debug("이전 검사 진행 중 — 이번 트리거 무시")
             return
@@ -176,11 +199,19 @@ class VisiPickStateMachine:
             frame_top  = self._cam_top.capture()
             frame_side = self._cam_side.capture()
 
-            part_type  = self._clf.classify(frame_top)
-            defect     = self._dd.detect(frame_top, frame_side)
-            cls        = judge(part_type, defect, self._recipe)
-            action     = gate_action_for(cls)
-            confidence = round(random.uniform(0.85, 0.99), 2) if DUMMY_MODE else 0.0
+            # 비전 → 두 딕셔너리 산출 (염재니)
+            top  = self._clf.classify_top(frame_top)              # {part, verdict_hint, confidence, raw_class}
+            side = self._pin.inspect_side(frame_side, top.get("part"))  # {verdict, pin_count, gap_cv, tip_y_range_px}
+
+            # 판정 — 염재니 Decision 채택 (judge 폐기)
+            result = self._decider.evaluate(top, side)
+            cls    = verdict_to_label(result.verdict)             # NEEDED | DUPLICATE | DEFECT
+            action = gate_action_for(cls)                          # 김선진 게이트 매핑 그대로
+            defect = defect_code_for(result, top, side)            # NONE | BENT_PIN | BROKEN | UNKNOWN
+
+            # 부품명: 영문(비전) → 한글(표시/레시피/DB). 단일 변환 지점 = part_map
+            part_type  = to_korean(top.get("part")) or "UNKNOWN"
+            confidence = round(float(result.confidence), 2)
             cycle_ms   = int((time.time() - t0) * 1000)
 
             # 게이트 예약 — 부품이 카메라→게이트 구간을 이동하는 시간만큼 지연
@@ -224,7 +255,7 @@ class VisiPickStateMachine:
             raise RuntimeError("로봇 트레이 이송 실패")
 
         self._serial.advance_tray()
-        self._publish_event("Conveyor", "INFO", "컨2 전진 — 다음 트레이 투입")
+        self._publish_event("Conveyor", "INFO", "컨3 — 다음 빈 트레이 공급 (2초 구동)")
 
         agv_id = (self.cycle % AGV_COUNT) + 1
         self._agv.dispatch(agv_id, source=AGV_START,
@@ -273,7 +304,7 @@ class VisiPickStateMachine:
                     break
 
                 logger.info(f"레시피 완성: {self._recipe.status()}")
-                self._tray_transfer()          # 컨1은 계속 운행, 컨2가 다음 트레이 투입
+                self._tray_transfer()          # 컨1은 계속 운행, 컨3가 다음 빈 트레이 공급
                 self._transition(State.COMPLETE)
                 logger.info(f"사이클 {self.cycle} 완료!")
                 time.sleep(1)
