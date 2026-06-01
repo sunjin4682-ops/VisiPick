@@ -12,6 +12,7 @@ from src.core.db import (
     get_agv_missions,
 )
 from src.core.agv_mqtt import get_manager as get_agv_manager
+import asyncio
 
 BROKER = config["mqtt"]["broker"]
 PORT   = config["mqtt"]["port"]
@@ -53,16 +54,20 @@ async def broadcast(data: dict):
 # =====================
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
+main_loop = None
+
+@app.on_event("startup")
+async def _capture_loop():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+
 def on_mqtt_message(client, userdata, msg):
-    """MQTT 수신 → WebSocket으로 push"""
     try:
         data = json.loads(msg.payload.decode())
         data["_topic"] = msg.topic
-        import asyncio
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(broadcast(data))
-        loop.close()
-    except:
+        if main_loop is not None:
+            asyncio.run_coroutine_threadsafe(broadcast(data), main_loop)
+    except Exception:
         pass
 
 mqtt_client.on_message = on_mqtt_message
@@ -79,10 +84,8 @@ async def websocket_endpoint(websocket: WebSocket):
     ws_clients.append(websocket)
     try:
         while True:
-            data = await websocket.receive_text()
-            msg = json.loads(data)
-            topic = msg.get("topic", "visipick/system/event")
-            mqtt_client.publish(topic, json.dumps(msg))
+            # 수신 전용 — 들어온 메시지는 무시(제어는 REST만 허용). 연결 유지/끊김 감지용.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_clients.remove(websocket)
 
