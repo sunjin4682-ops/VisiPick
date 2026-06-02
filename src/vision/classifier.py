@@ -187,21 +187,48 @@ class _YoloClassifier:
         r = results[0]
         if r.boxes is None or len(r.boxes) == 0:
             return ClassifyResult(mode="yolo")
-        # pick the highest-confidence box
+
+        # 모든 박스를 part(IC/CAP/HS/TB) / defect(Broken/Dented/Pinbent) 로 분리.
+        # argmax 단일 박스만 보면 신뢰도 높은 part 박스에 불량이 묻혀 PASS 로 새는 버그가 생김.
+        # → 불량 박스가 하나라도 있으면 REJECT 를 우선한다.
         confs = r.boxes.conf.cpu().numpy()
-        idx = int(np.argmax(confs))
-        cls_id = int(r.boxes.cls[idx].item())
-        cls_name = self.names.get(cls_id, str(cls_id))
-        mapping = self.class_map.get(cls_name, {})
-        x1, y1, x2, y2 = r.boxes.xyxy[idx].cpu().numpy().astype(int)
-        return ClassifyResult(
-            part=mapping.get("part"),
-            verdict_hint=mapping.get("verdict", "UNKNOWN"),
-            confidence=float(confs[idx]),
-            bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
-            raw_class=cls_name,
-            mode="yolo",
-        )
+        part_best = None      # (conf, cls_name, bbox)
+        defect_best = None    # (conf, cls_name, bbox)
+        for i in range(len(r.boxes)):
+            cls_name = self.names.get(int(r.boxes.cls[i].item()), str(int(r.boxes.cls[i].item())))
+            verdict = self.class_map.get(cls_name, {}).get("verdict", "UNKNOWN")
+            x1, y1, x2, y2 = r.boxes.xyxy[i].cpu().numpy().astype(int)
+            bbox = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+            cand = (float(confs[i]), cls_name, bbox)
+            if verdict == "REJECT":
+                if defect_best is None or cand[0] > defect_best[0]:
+                    defect_best = cand
+            else:  # PASS(part) 또는 UNKNOWN
+                if part_best is None or cand[0] > part_best[0]:
+                    part_best = cand
+
+        # part 는 정상 부품 박스에서, verdict 는 불량 우선
+        part_name = self.class_map.get(part_best[1], {}).get("part") if part_best else None
+        if defect_best is not None:
+            return ClassifyResult(
+                part=part_name,
+                verdict_hint="REJECT",
+                confidence=defect_best[0],
+                bbox=defect_best[2],
+                raw_class=defect_best[1],
+                mode="yolo",
+            )
+        # 불량 없음 → 정상 부품 PASS
+        if part_best is not None:
+            return ClassifyResult(
+                part=part_name,
+                verdict_hint=self.class_map.get(part_best[1], {}).get("verdict", "UNKNOWN"),
+                confidence=part_best[0],
+                bbox=part_best[2],
+                raw_class=part_best[1],
+                mode="yolo",
+            )
+        return ClassifyResult(mode="yolo")
 
 
 # ---------- Public façade -----------------------------------------------------
