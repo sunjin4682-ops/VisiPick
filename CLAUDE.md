@@ -230,7 +230,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `feat/jetson-migration`
-- 마지막 커밋: `bdc637e` (feat: Jetson 이식 파일 분리)
+- 마지막 커밋: `0a656be` (feat(tray): 컨3 이동시간 config화 + 마지막 부품 낙하 대기 + 진단 로그)
 
 ### 설계 버전
 - **V6.5** (2026-06-03 통합 로드맵 반영) — 헤드리스 우선 통합 래더
@@ -264,7 +264,23 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ `tests/auto_test.py` — 신 FSM(`start()`/`run_cycle()`)용 자급식 헤드리스 드라이버. **50/50 PASS · DB 522행 · 예외 0** (2026-06-03).
 - ✅ `state_machine.py` — `start()`/`run_cycle()` 분리, UNCERTAIN→Gate1, 수동제어 MQTT 핸들러, `_reset()`.
 
+#### Phase 1 하드웨어 브링업 (2026-06-03)
+실 ESP32(COM5)+ELP 카메라로 검사·분류·게이트 실가동. 주요 변경:
+- ✅ **프레임 그래버** `camera_top.py` — 백그라운드 스레드로 최신 프레임만 유지 → 버퍼 누적으로 검사 결과 밀리던 문제 해결. `camera_util` BUFFERSIZE=1.
+- ✅ **멀티프레임 보수 판정** `state_machine._inspect_one` — 1초/5프레임 추론 후 하나라도 불량이면 DEFECT(각도 의존 불량 누락 방지). `vision.inspect_frames`/`inspect_window_sec`.
+- ✅ **불량 우선 판정** `classifier.classify()` — argmax 단일박스 → 모든 박스 검사, 불량 박스 있으면 REJECT 우선.
+- ✅ **IR 트리거 지연** `sensor.trigger_to_capture_sec` — 센서가 카메라보다 앞일 때 부품 진입 대기 후 추론. `tools/test_ir_trigger.py` 단독 검증 도구.
+- ✅ **게이트 타이밍** — 기준시점을 검사 시작(t0)으로(검사 1초와 무관), `conveyor.gate_delay_offset_sec` 실측 오프셋. **역할 스왑: Gate1=불량 폐기, Gate2=중복/보류 반환**.
+- ✅ **연속 운전** — 로봇 이송 실패 비치명 처리 + 리셋 보장 → 한 트레이 후 종료 안 하고 다음 트레이로(demo_cycles까지).
+- ✅ **마지막 부품 낙하 대기** `conveyor.last_part_drop_sec` — 레시피 완성 후 4번째 양품이 트레이에 떨어질 때까지 대기 후 이재.
+- ✅ **트레이 이재 순서** — 컨3 1칸 전진 → 로봇 AGV 이재 → AGV 출발.
+- ✅ **컨3 이동시간 config화** `conveyor.tray_advance_ms` — `tray_cmd.duration_ms`로 전송, `esp32.ino`/MockESP32가 그 시간만큼 구동(없으면 기본 2초). **펌웨어 1회 재업로드 필요**.
+- 🔄 진단 중: 실가동 시 검사 로그 미출력 케이스 — `[진단]` INFO 로그로 트리거→검사 추적 중.
+
 ### 다음 작업
+- [ ] 실가동 검사 로그 미출력 원인 규명 (트리거 수신/락 점유/카메라 프레임 — `[진단]` 로그 확인)
+- [ ] 게이트 딜레이·`last_part_drop_sec`·`tray_advance_ms` 실측 튜닝 완료
+- [ ] `esp32.ino` 재업로드 (tray_cmd duration_ms 반영)
 - [ ] **C3** AGV 펌웨어(신규) — IR 8ch PID + RC522 + MQTT(GO/UNLOAD/복귀) + 지게 서보 (박은수, 최대 리스크)
 - [ ] **C4** `esp32.ino` — E-Stop attachInterrupt + volatile 플래그 + 명시적 RESET (박은수)
 - [ ] 로봇 4자세 티칭 → `config.robot.{pickup,lift,place,home}_angles` 기입 + Pi 공식 소켓 서버 실행 + `pip install pymycobot`

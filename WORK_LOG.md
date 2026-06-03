@@ -920,6 +920,42 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 ---
 
+## 2026-06-03
+
+> **이날 목표:** Phase 1(검사·분류·게이트) 실 ESP32(COM5)+ELP 카메라 하드웨어 브링업
+
+### 완료된 작업 ✅
+
+#### 비전 정확도/지연 문제 해결
+- **프레임 그래버**(`camera_top.py`): 백그라운드 스레드로 최신 프레임만 유지 → OpenCV 버퍼 누적으로 "검사 결과가 한 칸씩 밀리던" 문제 해결. `camera_util` BUFFERSIZE=1.
+- **멀티프레임 보수 판정**(`state_machine._inspect_one`): 1초/5프레임 추론 후 하나라도 불량이면 DEFECT. 각도에 따라 깨진 면이 한 프레임에만 보여도 잡음(깨진 방열판이 양품으로 수집되던 문제 해결). `vision.inspect_frames`/`inspect_window_sec`.
+- **불량 우선 판정**(`classifier.classify`): argmax 단일박스 → 모든 박스 검사, 불량 박스 있으면 REJECT 우선(IC 0.96+Pinbent 0.7 → PASS로 새던 버그).
+- 초점 문제로 불량이 DUPLICATE로만 나오던 현상 → 카메라 초점 조정으로 해결.
+
+#### IR 트리거 + 타이밍
+- **IR 트리거 지연**(`sensor.trigger_to_capture_sec`): 센서가 카메라보다 앞일 때 부품 진입 대기 후 추론. SEN0019(6~36V NPN, 검정=신호→GPIO34+풀업, 갈색=12V, 파랑=GND).
+- `tools/test_ir_trigger.py` 신규: IR 센서 단독 검증 도구.
+- **게이트 타이밍**: 기준시점을 검사 시작(t0)으로 → 멀티프레임 1초와 무관하게 일정. `conveyor.gate_delay_offset_sec` 실측 오프셋(현재 -7.5).
+- **게이트 역할 스왑**: Gate1=불량(DEFECT) 폐기, Gate2=중복/보류 반환.
+
+#### 트레이/연속운전
+- **연속 운전**: 로봇 이송 실패 비치명 처리 + 레시피/트레이 리셋 보장 → 한 트레이 완성 후 종료 안 하고 다음 트레이로(demo_cycles까지).
+- **마지막 부품 낙하 대기**(`conveyor.last_part_drop_sec`): 레시피 완성 시점엔 4번째 양품이 아직 컨1 위 → 트레이 낙하까지 대기 후 이재.
+- **트레이 이재 순서 변경**: 컨3 1칸 전진 → 로봇 AGV 이재 → AGV 출발.
+- **컨3 이동시간 config화**(`conveyor.tray_advance_ms`): `tray_cmd.duration_ms`로 전송, `esp32.ino`/MockESP32가 그 시간만큼 구동. 펌웨어 1회 재업로드 후 config만으로 조정 가능.
+
+### 진행 중 / 이슈 ⚠️
+- 실가동 시 일부 케이스에서 검사 로그 미출력 → `on_sensor_triggered`/`_inspect_one`에 `[진단]` INFO 로그 추가해 원인 추적 중(트리거 수신/락 점유/카메라 프레임 어디서 끊기는지).
+- COM5 포트 오류(`FileNotFoundError`) 재발 시: 포트번호 변경/Serial Monitor 점유/ESP32 분리 확인.
+- ESP32 업로드 오류(`Packet content transfer stopped`): Upload Speed 115200·데이터 케이블·BOOT 버튼·외부 부하 분리.
+
+### 다음 할 일
+- [ ] 검사 로그 미출력 원인 규명 (`[진단]` 로그 확인)
+- [ ] 게이트 딜레이·`last_part_drop_sec`·`tray_advance_ms` 실측 튜닝
+- [ ] `esp32.ino` 재업로드(tray_cmd duration_ms 반영)
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD
