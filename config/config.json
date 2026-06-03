@@ -65,7 +65,8 @@
   "conveyor": {
     "speed_cm_per_s": 1.5,
     "camera_to_gate1_cm": 30,
-    "camera_to_gate2_cm": 45
+    "camera_to_gate2_cm": 45,
+    "gate_delay_offset_sec": -4.5
   },
 
   "serial": {
@@ -82,7 +83,7 @@
 
   "sensor": {
     "debounce_sec": 0.5,
-    "trigger_to_capture_sec": 6.5
+    "trigger_to_capture_sec": 6.0
   },
 
   "robot": {

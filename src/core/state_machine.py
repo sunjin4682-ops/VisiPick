@@ -34,8 +34,10 @@ CONVEYOR_SPEED = config["conveyor"]["speed_cm_per_s"]
 
 _conv_cfg    = config.get("conveyor", {})
 _speed       = _conv_cfg.get("speed_cm_per_s", 1.5)
-GATE1_DELAY  = _conv_cfg.get("camera_to_gate1_cm", 30) / _speed
-GATE2_DELAY  = _conv_cfg.get("camera_to_gate2_cm", 45) / _speed
+# 게이트 보정 오프셋(초) — 실측으로 게이트가 이르면 +, 늦으면 - 로 미세조정.
+_gate_offset = _conv_cfg.get("gate_delay_offset_sec", 0.0)
+GATE1_DELAY  = _conv_cfg.get("camera_to_gate1_cm", 30) / _speed + _gate_offset
+GATE2_DELAY  = _conv_cfg.get("camera_to_gate2_cm", 45) / _speed + _gate_offset
 DEBOUNCE_SEC = config.get("sensor", {}).get("debounce_sec", 0.5)
 # IR 트리거 → 카메라 추론 사이 지연(초). IR 센서가 카메라보다 앞(상류)에 있을 때
 # 부품이 카메라 시야에 들어올 때까지 기다린다. 0이면 즉시 추론(센서=카메라 위치).
@@ -187,8 +189,11 @@ class VisiPickStateMachine:
             threading.Thread(target=self._inspect_one, daemon=True).start()
 
     # ── 게이트 예약 큐 ──────────────────────────────────────────
-    def _schedule_gate(self, gate_no: int, delay_sec: float):
-        fire_at = time.time() + delay_sec
+    def _schedule_gate(self, gate_no: int, delay_sec: float, ref_time: float | None = None):
+        # 기준 시점(ref_time)에서 delay_sec 후 발사. ref_time 미지정 시 현재.
+        # 검사 시작(부품이 카메라 진입한 때)을 기준으로 주면 멀티프레임 검사
+        # 소요시간(~1초)과 무관하게 게이트 타이밍이 일정해진다.
+        fire_at = (ref_time if ref_time is not None else time.time()) + delay_sec
         with self._gate_lock:
             self._gate_queue.append((fire_at, gate_no))
 
@@ -284,11 +289,12 @@ class VisiPickStateMachine:
             logger.debug(f"멀티프레임 판정: {[f['cls'] for f in frames]} → {cls}")
 
             # 게이트 예약 — 부품이 카메라→게이트 구간을 이동하는 시간만큼 지연.
-            # DUPLICATE(중복)·UNCERTAIN(보류)은 Gate1(반환 컨베이어), DEFECT(불량)은 Gate2.
-            if cls in ("DUPLICATE", "UNCERTAIN"):
-                self._schedule_gate(1, GATE1_DELAY)
-            elif cls == "DEFECT":
-                self._schedule_gate(2, GATE2_DELAY)
+            # 기준은 검사 시작(t0=부품이 카메라 진입한 때) → 검사 소요시간과 무관하게 일정.
+            # Gate1=불량(DEFECT, 폐기), Gate2=중복/보류(DUPLICATE·UNCERTAIN, 반환 컨베이어).
+            if cls == "DEFECT":
+                self._schedule_gate(1, GATE1_DELAY, ref_time=t0)
+            elif cls in ("DUPLICATE", "UNCERTAIN"):
+                self._schedule_gate(2, GATE2_DELAY, ref_time=t0)
 
             if cls == "NEEDED":
                 self._recipe.mark_collected(part_type)
@@ -336,15 +342,22 @@ class VisiPickStateMachine:
     # ── 트레이 이송 + AGV 출발 ────────────────────────────────
     def _tray_transfer(self):
         self._transition(State.TRAY_TRANSFER)
-        self._publish_event("Robot", "INFO", "트레이 이송 시작")
 
-        ok = self._robot.transfer_tray()
-        if not ok:
-            raise RuntimeError("로봇 트레이 이송 실패")
-
+        # 1) 컨3 1칸 전진 (완성 트레이를 이재 위치로 이동 / 다음 빈 트레이 공급)
         self._serial.advance_tray()
-        self._publish_event("Conveyor", "INFO", "컨3 — 다음 빈 트레이 공급 (2초 구동)")
+        self._publish_event("Conveyor", "INFO", "컨3 — 트레이 1칸 전진 (2초 구동)")
 
+        # 2) 로봇이 완성 트레이를 AGV에 이재. 실패는 비치명 처리 —
+        #    로봇 미준비여도 다음 트레이로 계속 진행.
+        #    (실로봇 도입 후 '실패 시 정지'가 필요하면 여기서 raise 로 되돌릴 것.)
+        self._publish_event("Robot", "INFO", "트레이 이송 시작")
+        try:
+            if not self._robot.transfer_tray():
+                logger.warning("로봇 트레이 이송 실패 — 건너뛰고 다음 트레이 진행")
+        except Exception as e:
+            logger.warning(f"로봇 이송 예외 — 건너뜀: {e}")
+
+        # 3) AGV 창고 출발
         agv_id = (self.cycle % AGV_COUNT) + 1
         self._agv.dispatch(agv_id, source=AGV_START,
                            recipe_session_id=self._session_id)
