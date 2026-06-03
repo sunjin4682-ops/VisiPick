@@ -233,6 +233,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - 마지막 커밋: `bdc637e` (feat: Jetson 이식 파일 분리)
 
 ### 설계 버전
+- **V6.5** (2026-06-03 통합 로드맵 반영) — 헤드리스 우선 통합 래더
 - **V6.3** (2026-05-22 반영)
 - V6.2 대비: 푸셔 게이트 2개, 2단계 검사(상부+측면), 중력 수집, 트레이 단위 이재, MQTT AGV, Python 단일 마스터
 
@@ -254,9 +255,20 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ Mock 환경 전체 플로우 재검증 PASS — IDLE→RUNNING→TRAY_TRANSFER→COMPLETE 사이클 확인 (2026-05-27)
 - 🔄 Camera1·Camera2 실제 OpenCV 파이프라인 — 더미 모드만 구현, 실제 하드웨어 미구현
 
+#### V6.5 통합 로드맵 (2026-06-03)
+- ✅ **C1** `decision.py` — `Verdict.UNCERTAIN` 추가: 저신뢰/미검출을 REJECT(Gate2 폐기)가 아닌 **Gate1 반환**(재투입)으로. `db.get_stats().uncertain_count` 추가. (`tests/testsets.py` 6/6 PASS)
+- ✅ **C2** `agv_mqtt.py` — 창고 도착 → 하역(UNLOAD) → **N1 복귀 dispatch** 라운드트립. `_pending` 에 phase(outbound/returning) 추적.
+- ✅ **로봇팔** `src/devices/robot.py` — pymycobot `MyCobot280Socket` 드롭인(실로봇 공식 소켓 서버 **9000**, 지연연결+웨이포인트 폴링+그리퍼). dummy=MockMyCobot(9002) 유지. config `robot` 에 그리퍼·자세각(티칭 대기 0)·joint_limits 키 추가.
+- ✅ **REST 제어**(WPF W2) `api_server.py` — `POST /api/gate/{n}/push · /api/robot/transfer · /api/agv/{cmd} · /api/reset` + FSM MQTT 핸들러(gate/cmd·robot/cmd·system reset). `autorun_fsm` opt-in startup 훅.
+- ✅ `mock/MockAGV.py` — TCP→**MQTT** 재작성(agv_mqtt 짝). `mock/MockBroker.py` — 순수 파이썬 MQTT 브로커(테스트용, docker/mosquitto 불필요).
+- ✅ `tests/auto_test.py` — 신 FSM(`start()`/`run_cycle()`)용 자급식 헤드리스 드라이버. **50/50 PASS · DB 522행 · 예외 0** (2026-06-03).
+- ✅ `state_machine.py` — `start()`/`run_cycle()` 분리, UNCERTAIN→Gate1, 수동제어 MQTT 핸들러, `_reset()`.
+
 ### 다음 작업
+- [ ] **C3** AGV 펌웨어(신규) — IR 8ch PID + RC522 + MQTT(GO/UNLOAD/복귀) + 지게 서보 (박은수, 최대 리스크)
+- [ ] **C4** `esp32.ino` — E-Stop attachInterrupt + volatile 플래그 + 명시적 RESET (박은수)
+- [ ] 로봇 4자세 티칭 → `config.robot.{pickup,lift,place,home}_angles` 기입 + Pi 공식 소켓 서버 실행 + `pip install pymycobot`
 - [ ] imgsz=416 에서 약한 클래스(부서진 칩/휜 핀) 검출 유지 확인 (저하 시 512 상향 또는 재학습)
 - [ ] Camera2 측면 핀 검사 OpenCV 파이프라인 (실제 하드웨어) — `camera_util.py` 재활용
-- [ ] ESP32 실제 연결 후 `tests/testsets.py` 하드웨어 테스트
-- [ ] `tests/auto_test.py` 50사이클 정식 실행
+- [ ] Phase 2 래더: dummy_mode 한 칸씩 false 전환(serial→vision→robot→agv) 하드웨어 통합
 - [ ] `config["gates"]["1/2"]["delay_sec"]` 정밀 실측 (현재 20.0/30.0은 이론값)

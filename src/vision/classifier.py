@@ -148,6 +148,8 @@ class _YoloClassifier:
         self.conf = float(cfg["yolo_conf"])
         self.iou = float(cfg["yolo_iou"])
         self.imgsz = int(cfg["yolo_imgsz"])
+        # 불량 클래스는 part 박스보다 신뢰도가 낮아도 잡아야 하므로 별도 임계값
+        self.defect_min_conf = float(cfg.get("defect_min_conf", self.conf))
         self.class_map: Dict[str, Dict[str, str]] = cfg["yolo_class_map"]
         # cache class name list
         self.names: Dict[int, str] = self.model.names  # type: ignore[assignment]
@@ -188,47 +190,65 @@ class _YoloClassifier:
         if r.boxes is None or len(r.boxes) == 0:
             return ClassifyResult(mode="yolo")
 
-        # 모든 박스를 part(IC/CAP/HS/TB) / defect(Broken/Dented/Pinbent) 로 분리.
-        # argmax 단일 박스만 보면 신뢰도 높은 part 박스에 불량이 묻혀 PASS 로 새는 버그가 생김.
-        # → 불량 박스가 하나라도 있으면 REJECT 를 우선한다.
         confs = r.boxes.conf.cpu().numpy()
-        part_best = None      # (conf, cls_name, bbox)
-        defect_best = None    # (conf, cls_name, bbox)
-        for i in range(len(r.boxes)):
-            cls_name = self.names.get(int(r.boxes.cls[i].item()), str(int(r.boxes.cls[i].item())))
-            verdict = self.class_map.get(cls_name, {}).get("verdict", "UNKNOWN")
-            x1, y1, x2, y2 = r.boxes.xyxy[i].cpu().numpy().astype(int)
-            bbox = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
-            cand = (float(confs[i]), cls_name, bbox)
-            if verdict == "REJECT":
-                if defect_best is None or cand[0] > defect_best[0]:
-                    defect_best = cand
-            else:  # PASS(part) 또는 UNKNOWN
-                if part_best is None or cand[0] > part_best[0]:
-                    part_best = cand
+        cls_ids = r.boxes.cls.cpu().numpy().astype(int)
+        xyxy = r.boxes.xyxy.cpu().numpy().astype(int)
 
-        # part 는 정상 부품 박스에서, verdict 는 불량 우선
-        part_name = self.class_map.get(part_best[1], {}).get("part") if part_best else None
-        if defect_best is not None:
+        # 모든 박스를 part(IC/CAP/HS/TB) / defect(Broken/Dented/Pinbent) 로 분리.
+        # 단일 argmax 를 쓰면 신뢰도 높은 part 박스가 불량 박스를 가린다 → 전수 검사.
+        part_idx: Optional[int] = None       # 최고신뢰 part 박스
+        defect_idx: Optional[int] = None     # 최고신뢰 defect 박스 (defect_min_conf 이상만)
+        for i in range(len(confs)):
+            name = self.names.get(int(cls_ids[i]), str(int(cls_ids[i])))
+            m = self.class_map.get(name, {})
+            if "part" in m:
+                if part_idx is None or confs[i] > confs[part_idx]:
+                    part_idx = i
+            elif m.get("verdict") == "REJECT" and confs[i] >= self.defect_min_conf:
+                if defect_idx is None or confs[i] > confs[defect_idx]:
+                    defect_idx = i
+
+        # 매핑된 part/defect 가 하나도 없으면(미지 클래스만) → 최고신뢰 박스로 폴백
+        if part_idx is None and defect_idx is None:
+            i = int(np.argmax(confs))
+            name = self.names.get(int(cls_ids[i]), str(int(cls_ids[i])))
+            m = self.class_map.get(name, {})
+            x1, y1, x2, y2 = xyxy[i]
             return ClassifyResult(
-                part=part_name,
+                part=m.get("part"), verdict_hint=m.get("verdict", "UNKNOWN"),
+                confidence=float(confs[i]),
+                bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
+                raw_class=name, mode="yolo",
+            )
+
+        # 부품 종류는 part 박스 우선(없으면 defect 박스 위치 사용)
+        base_idx = part_idx if part_idx is not None else defect_idx
+        base_name = self.names.get(int(cls_ids[base_idx]), str(int(cls_ids[base_idx])))
+        part = self.class_map.get(base_name, {}).get("part")
+
+        # 불량 박스가 하나라도 있으면 REJECT (신뢰도가 part 보다 낮아도)
+        if defect_idx is not None:
+            dname = self.names.get(int(cls_ids[defect_idx]), str(int(cls_ids[defect_idx])))
+            dx1, dy1, dx2, dy2 = xyxy[defect_idx]
+            return ClassifyResult(
+                part=part,                                  # 종류는 유지(IC/CAP/...)
                 verdict_hint="REJECT",
-                confidence=defect_best[0],
-                bbox=defect_best[2],
-                raw_class=defect_best[1],
+                confidence=float(confs[defect_idx]),
+                bbox=(int(dx1), int(dy1), int(dx2 - dx1), int(dy2 - dy1)),  # 불량 위치
+                raw_class=dname,                            # Pinbent / Broken / Dented
                 mode="yolo",
             )
-        # 불량 없음 → 정상 부품 PASS
-        if part_best is not None:
-            return ClassifyResult(
-                part=part_name,
-                verdict_hint=self.class_map.get(part_best[1], {}).get("verdict", "UNKNOWN"),
-                confidence=part_best[0],
-                bbox=part_best[2],
-                raw_class=part_best[1],
-                mode="yolo",
-            )
-        return ClassifyResult(mode="yolo")
+
+        # 불량 없음 → part 박스로 PASS
+        bx1, by1, bx2, by2 = xyxy[base_idx]
+        return ClassifyResult(
+            part=part,
+            verdict_hint=self.class_map.get(base_name, {}).get("verdict", "UNKNOWN"),
+            confidence=float(confs[base_idx]),
+            bbox=(int(bx1), int(by1), int(bx2 - bx1), int(by2 - by1)),
+            raw_class=base_name,
+            mode="yolo",
+        )
 
 
 # ---------- Public façade -----------------------------------------------------

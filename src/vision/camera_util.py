@@ -38,6 +38,7 @@ def apply_camera_controls(cap, cam: dict):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam.get("height", 720))
     cap.set(cv2.CAP_PROP_FPS,          cam.get("fps", 30))
 
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)      # 버퍼 최소화 — 오래된 프레임 누적(검사 밀림) 완화
     ctrl = cam.get("controls", {})
     for key, prop in _CTRL_PROPS:            # config 에 있는 키만 적용
         if key in ctrl:

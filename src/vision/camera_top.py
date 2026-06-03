@@ -1,3 +1,6 @@
+import threading
+import time
+
 from src.utils.logger import setup_logger
 from src.utils.config_loader import config
 from src.vision.camera_util import center_square, open_top_camera
@@ -18,6 +21,9 @@ class CameraTop:
 
     def __init__(self):
         self._cap = None
+        self._latest = None              # 그래버가 갱신하는 최신 프레임
+        self._lock = threading.Lock()
+        self._running = False
         if DUMMY_MODE:
             logger.info("Camera1(상부) 더미 모드")
             return
@@ -25,22 +31,39 @@ class CameraTop:
         self._cap = open_top_camera(CAM_TOP)
         if not self._cap.isOpened():
             raise RuntimeError(f"Camera1(상부) 열기 실패: index={CAM_INDEX}")
+        # 백그라운드 그래버: 계속 읽어 '최신 프레임'만 유지 → 트리거 시 오래된 버퍼
+        # 프레임을 검사해 결과가 하나씩 밀리는 문제 제거.
+        self._running = True
+        threading.Thread(target=self._grab_loop, daemon=True).start()
         logger.info(f"Camera1(상부) 초기화 완료: {WIDTH}x{HEIGHT}@{FPS}fps"
-                    f"{' (정사각 크롭)' if SQUARE else ''}")
+                    f"{' (정사각 크롭)' if SQUARE else ''} — 그래버 스레드 ON")
+
+    def _grab_loop(self):
+        """카메라에서 끊임없이 읽어 최신 프레임만 보관."""
+        while self._running and self._cap is not None:
+            ret, frame = self._cap.read()
+            if ret:
+                with self._lock:
+                    self._latest = frame
+            else:
+                time.sleep(0.005)
 
     def capture(self):
-        """프레임 캡처. 더미 모드: None 반환."""
+        """가장 최신 프레임 반환. 더미 모드/미수신: None."""
         if DUMMY_MODE or self._cap is None:
             return None
-        ret, frame = self._cap.read()
-        if not ret:
-            logger.warning("Camera1 프레임 캡처 실패")
+        with self._lock:
+            frame = None if self._latest is None else self._latest.copy()
+        if frame is None:
+            logger.warning("Camera1 최신 프레임 없음")
             return None
         if SQUARE:                       # 학습셋(512x512 정사각) 기하에 맞춤
             frame = center_square(frame)
         return frame
 
     def release(self):
+        self._running = False
         if self._cap:
+            time.sleep(0.05)             # 그래버 루프 종료 대기
             self._cap.release()
             logger.info("Camera1(상부) 해제")

@@ -4,8 +4,9 @@
 Merges Camera1 (classification + orientation hint) and Camera2 (pin
 inspection) results into one of:
   - PASS      : 양품   -> no gate (lets the part drop into tray)
-  - REJECT    : 불량   -> Gate2  (orientation wrong, broken, pinbent, low-conf...)
+  - REJECT    : 불량   -> Gate2  (orientation wrong, broken, pinbent...)
   - DUPLICATE : 중복   -> Gate1  (this part type already collected)
+  - UNCERTAIN : 보류   -> Gate1  (저신뢰/미검출 — 폐기 아닌 반환 후 재투입, C1)
 
 염재니 Decision.evaluate(top, side) 를 채택하고 김선진 judge() 는 폐기한다.
 김선진 인프라(gate_action_for, 3클래스 라벨, DB defect_code)와의 경계는
@@ -34,6 +35,7 @@ class Verdict(str, Enum):
     PASS = "PASS"
     REJECT = "REJECT"
     DUPLICATE = "DUPLICATE"
+    UNCERTAIN = "UNCERTAIN"
 
 
 @dataclass
@@ -65,10 +67,12 @@ class Decision:
         pin_verdict = (side.get("verdict") or "UNKNOWN").upper()
         reasons: List[str] = []
 
-        # 1) Low-confidence or no detection -> REJECT (route to reject bin)
+        # 1) Low-confidence or no detection -> UNCERTAIN (Gate1 반환 → 재투입, C1)
+        #    불량(Gate2 폐기)이 아니라 '판단 보류'다. 정상품을 한 번의 저신뢰로
+        #    버리지 않도록 반환 컨베이어로 돌려보내 재검사 기회를 준다.
         if part is None or conf < self.min_conf:
-            reasons.append(f"low_conf={conf:.2f}")
-            return DecisionResult(Verdict.REJECT, part, reasons, conf,
+            reasons.append("no_detection" if part is None else f"low_conf={conf:.2f}")
+            return DecisionResult(Verdict.UNCERTAIN, part, reasons, conf,
                                   debug={"hint": hint, "pin": pin_verdict})
 
         # 2) Orientation / classifier said reject
@@ -97,23 +101,25 @@ class Decision:
 
 # ── 김선진 경계 어댑터 ────────────────────────────────────────────────────────
 
-# 염재니 Verdict -> 김선진 3클래스 라벨
+# 염재니 Verdict -> 분류 라벨 (UNCERTAIN 추가: 별도 라벨로 통계/WPF 패널 분리)
 _VERDICT_TO_LABEL = {
     "PASS":      "NEEDED",
     "REJECT":    "DEFECT",
     "DUPLICATE": "DUPLICATE",
+    "UNCERTAIN": "UNCERTAIN",
 }
 
-# 김선진 3클래스 라벨 -> 게이트 동작 (김선진 것 그대로 유지)
+# 분류 라벨 -> 게이트 동작. UNCERTAIN 은 DUPLICATE 와 같은 Gate1(반환 컨베이어)로.
 _GATE_ACTION = {
     "NEEDED":    "PASS_THROUGH",
     "DUPLICATE": "GATE1_PUSH",
+    "UNCERTAIN": "GATE1_PUSH",
     "DEFECT":    "GATE2_PUSH",
 }
 
 
 def verdict_to_label(verdict) -> str:
-    """염재니 Verdict(enum/str) → 김선진 NEEDED/DUPLICATE/DEFECT.
+    """염재니 Verdict(enum/str) → NEEDED/DUPLICATE/DEFECT/UNCERTAIN 라벨.
 
     매핑 외 값은 안전하게 DEFECT(reject bin) 로 보낸다.
     """

@@ -1,4 +1,4 @@
-import socket, json, threading, time, sys
+import socket, json, threading, time, os, sys
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from src.utils.logger import setup_logger
 logger = setup_logger("mycobot")
 
 HOST, PORT = "0.0.0.0", 9002
+DELAY = float(os.environ.get("MOCK_ROBOT_DELAY", "2"))   # 이재 동작 시뮬 시간(초). 테스트는 짧게.
 
 def handle(conn, addr):
     logger.info(f"myCobot Mock: {addr} 연결")
@@ -21,7 +22,7 @@ def handle(conn, addr):
 
             if msg.get("type") == "robot_cmd":
                 logger.info(f"[Mock] {msg['action']} 시뮬 중...")
-                time.sleep(2)  # 동작 시간 시뮬
+                time.sleep(DELAY)  # 동작 시간 시뮬 (MOCK_ROBOT_DELAY 로 조절)
                 ack = {
                     "type": "robot_ack",
                     "action": msg["action"],

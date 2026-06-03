@@ -63,6 +63,19 @@ async def _capture_loop():
     global main_loop
     main_loop = asyncio.get_running_loop()
 
+
+@app.on_event("startup")
+async def _maybe_autorun_fsm():
+    """config.system.autorun_fsm=true 면 FSM 을 백그라운드 스레드로 동반 기동
+    (로드맵 §0.1 'FSM startup 훅' — 한 명령으로 헤드리스 루프까지 구동).
+
+    기본 false: FSM/API 는 보통 별도 프로세스(python src/core/state_machine.py)로 운용한다.
+    real 모드(카메라·시리얼)면 하드웨어가 있어야 하므로 의도적으로 opt-in."""
+    if not config.get("system", {}).get("autorun_fsm", False):
+        return
+    from src.core.state_machine import VisiPickStateMachine
+    threading.Thread(target=lambda: VisiPickStateMachine().run(), daemon=True).start()
+
 def on_mqtt_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
@@ -240,6 +253,42 @@ def emergency_stop():
         "timestamp": datetime.now().isoformat(),
     }))
     return {"result": "emergency_stop_requested"}
+
+# ── 수동 제어 (Phase 3 / WPF W2) — 게이트·로봇·AGV·리셋 ──────────────────
+@app.post("/api/gate/{gate_no}/push", tags=["제어"])
+def gate_push(gate_no: int):
+    """게이트 푸셔 수동 동작 (1=반환 Gate1, 2=불량 Gate2). FSM이 ESP32로 전달."""
+    mqtt_client.publish("visipick/gate/cmd", json.dumps({
+        "type": "gate_cmd", "gate": gate_no, "action": "push",
+        "timestamp": datetime.now().isoformat(),
+    }))
+    return {"result": "gate_push", "gate": gate_no}
+
+@app.post("/api/robot/transfer", tags=["제어"])
+def robot_transfer():
+    """myCobot 트레이 이재 수동 트리거. FSM이 로봇으로 전달."""
+    mqtt_client.publish("visipick/robot/cmd", json.dumps({
+        "type": "robot_cmd", "action": "transfer",
+        "timestamp": datetime.now().isoformat(),
+    }))
+    return {"result": "robot_transfer_requested"}
+
+@app.post("/api/agv/{cmd}", tags=["제어"])
+def agv_command(cmd: str, agv_id: int = 1):
+    """AGV 수동 명령. cmd=dispatch → 창고 출고(도착 후 자동 하역·N1 복귀)."""
+    if cmd == "dispatch":
+        get_agv_manager().dispatch(agv_id)
+        return {"result": "dispatched", "agv_id": agv_id}
+    return Response(status_code=400, content=f"unknown agv cmd: {cmd}")
+
+@app.post("/api/reset", tags=["제어"])
+def reset():
+    """비상정지/오류 래치 해제 + 레시피·트레이 카운트 초기화 → RUNNING 복귀."""
+    mqtt_client.publish("visipick/system/cmd", json.dumps({
+        "action": "reset",
+        "timestamp": datetime.now().isoformat(),
+    }))
+    return {"result": "reset_requested"}
 
 # =====================
 # REST API — 시스템 이벤트

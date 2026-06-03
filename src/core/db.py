@@ -162,6 +162,7 @@ def get_stats() -> dict:
     needed_count  = c.execute("SELECT COUNT(*) FROM InspectionResults WHERE Classification='NEEDED'").fetchone()[0]
     dup_count     = c.execute("SELECT COUNT(*) FROM InspectionResults WHERE Classification='DUPLICATE'").fetchone()[0]
     defect_count  = c.execute("SELECT COUNT(*) FROM InspectionResults WHERE Classification='DEFECT'").fetchone()[0]
+    uncertain_count = c.execute("SELECT COUNT(*) FROM InspectionResults WHERE Classification='UNCERTAIN'").fetchone()[0]
     classification_counts = {
         r[0]: r[1] for r in c.execute(
             "SELECT Classification, COUNT(*) FROM InspectionResults GROUP BY Classification"
@@ -183,6 +184,7 @@ def get_stats() -> dict:
         "needed_count":         needed_count,
         "duplicate_count":      dup_count,
         "defect_count":         defect_count,
+        "uncertain_count":      uncertain_count,
         "pass_rate":            round(needed_count / total * 100, 1) if total else 0,
         "classification_counts": classification_counts,
         "defect_type_counts":   defect_type_counts,

@@ -5,10 +5,12 @@
 
     "mode": "yolo",
     "yolo_model_path": "models/best.pt",
-    "yolo_conf": 0.35,
+    "yolo_conf": 0.4,
     "yolo_iou": 0.4,
     "yolo_imgsz": 416,
     "min_conf": 0.40,
+    "inspect_frames": 5,
+    "inspect_window_sec": 1.0,
 
     "yolo_class_map": {
       "IC":      { "part": "IC",            "verdict": "PASS" },
@@ -62,14 +64,12 @@
 
   "conveyor": {
     "speed_cm_per_s": 1.5,
-    "gate1_delay_ms": 0,
-    "gate2_delay_ms": 0,
     "camera_to_gate1_cm": 30,
     "camera_to_gate2_cm": 45
   },
 
   "serial": {
-    "port": "COM8",
+    "port": "COM5",
     "baudrate": 115200,
     "dummy_mode": false
   },
@@ -81,14 +81,24 @@
   },
 
   "sensor": {
-    "debounce_sec": 0.5
+    "debounce_sec": 0.5,
+    "trigger_to_capture_sec": 6.5
   },
 
   "robot": {
     "host": "192.168.0.47",
-    "port": 9002,
+    "port": 9000,
+    "_port_note": "pymycobot 공식 소켓 서버 포트(9000) — 기존 커스텀 RPi4 JSON 서버(9002) 아님. real 전환 시 Pi에서 공식 소켓 서버 실행 + 'pip install pymycobot' 필요. mock 은 mock.robot.port(9002, MockMyCobot) 사용.",
     "speed": 80,
-    "dummy_mode": false
+    "dummy_mode": true,
+    "gripper_open": 100,
+    "gripper_close": 30,
+    "pickup_angles": [0, 0, 0, 0, 0, 0],
+    "lift_angles":   [0, 0, 0, 0, 0, 0],
+    "place_angles":  [0, 0, 0, 0, 0, 0],
+    "home_angles":   [0, 0, 0, 0, 0, 0],
+    "_angles_note": "4개 자세는 티칭으로 채울 것 — robot.dummy_mode=false 로 두고 get_angles() 기록 (Phase2 Step6 dense teach 10~15점). 현재 0 은 미티칭 플레이스홀더.",
+    "joint_limits": { "j2_min_deg": -120, "j3_min_deg": -120 }
   },
 
   "agv": {
@@ -132,6 +142,8 @@
   "system": {
     "heartbeat_interval_sec": 2,
     "log_dir": "logs",
-    "demo_cycles": 50
+    "demo_cycles": 50,
+    "autorun_fsm": false,
+    "_autorun_fsm_note": "true 면 api_server 가 startup 훅으로 FSM 까지 동반 기동(로드맵 §0.1). 기본 false — FSM 은 보통 'python src/core/state_machine.py' 별도 프로세스로 운용."
   }
 }

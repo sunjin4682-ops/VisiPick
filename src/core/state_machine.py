@@ -37,6 +37,14 @@ _speed       = _conv_cfg.get("speed_cm_per_s", 1.5)
 GATE1_DELAY  = _conv_cfg.get("camera_to_gate1_cm", 30) / _speed
 GATE2_DELAY  = _conv_cfg.get("camera_to_gate2_cm", 45) / _speed
 DEBOUNCE_SEC = config.get("sensor", {}).get("debounce_sec", 0.5)
+# IR 트리거 → 카메라 추론 사이 지연(초). IR 센서가 카메라보다 앞(상류)에 있을 때
+# 부품이 카메라 시야에 들어올 때까지 기다린다. 0이면 즉시 추론(센서=카메라 위치).
+# 실측 후 config.sensor.trigger_to_capture_sec 에 기입 (거리[cm] / 컨베이어속도[cm/s]).
+CAPTURE_DELAY_SEC = config.get("sensor", {}).get("trigger_to_capture_sec", 0.0)
+# 멀티프레임 보수 판정: 부품이 카메라 구간을 지나는 동안 N프레임 추론 →
+# 하나라도 불량(DEFECT)이면 DEFECT. 각도에 따라 불량이 한 프레임에만 보여도 잡는다.
+INSPECT_FRAMES = int(config["vision"].get("inspect_frames", 5))
+INSPECT_WINDOW = float(config["vision"].get("inspect_window_sec", 1.0))
 
 
 class State(Enum):
@@ -96,7 +104,8 @@ class VisiPickStateMachine:
         self._mqtt = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self._mqtt.on_message = self._on_mqtt_cmd
         self._mqtt.connect(BROKER, MQTT_PORT)
-        for t in ("visipick/system/cmd", "visipick/vision/cmd", "visipick/conveyor/cmd"):
+        for t in ("visipick/system/cmd", "visipick/vision/cmd", "visipick/conveyor/cmd",
+                  "visipick/gate/cmd", "visipick/robot/cmd"):
             self._mqtt.subscribe(t)
         self._mqtt.loop_start()
 
@@ -108,16 +117,43 @@ class VisiPickStateMachine:
             data   = json.loads(msg.payload.decode())
             action = data.get("action")
             topic  = msg.topic
-            if topic == "visipick/system/cmd" and action == "stop":
-                self._emergency_stop()
+            if topic == "visipick/system/cmd":
+                if action == "stop":
+                    self._emergency_stop()
+                elif action == "reset":
+                    self._reset()
             elif topic == "visipick/vision/cmd":
                 self._inspect_enabled = (action == "start")
                 logger.info(f"비전 {'시작' if action=='start' else '중지'}")
             elif topic == "visipick/conveyor/cmd":
                 self._serial.set_conveyor_speed(CONVEYOR_SPEED if action == "start" else 0.0)
                 logger.info(f"컨베이어 {'시작' if action=='start' else '중지'}")
+            elif topic == "visipick/gate/cmd":         # 수동 게이트 푸시 (/api/gate/{n}/push)
+                gate = int(data.get("gate"))
+                self._serial.push_gate(gate)
+                logger.info(f"게이트 {gate} 수동 푸시")
+            elif topic == "visipick/robot/cmd":        # 수동 트레이 이재 (/api/robot/transfer)
+                if action == "transfer":
+                    threading.Thread(target=self._robot.transfer_tray, daemon=True).start()
+                    logger.info("로봇 트레이 이재 수동 트리거")
         except Exception:
             pass
+
+    def _reset(self):
+        """비상정지/오류 래치 해제 + 레시피·트레이·게이트 큐 초기화 → RUNNING (/api/reset).
+
+        주의: run() 메인 루프는 1회성 배치라, 이미 _shutdown 된 뒤엔 상태만 RUNNING 으로
+        표시될 뿐 새 사이클은 run() 재호출이 필요하다 (Phase4 'RESET 절차 점검' 확정 항목)."""
+        logger.info("리셋 요청 — 상태/카운트 초기화")
+        self._stop_requested.clear()
+        with self._gate_lock:
+            self._gate_queue.clear()
+        self._recipe.reset()
+        self._tray.reset()
+        self._inspect_enabled = True
+        self._serial.set_conveyor_speed(CONVEYOR_SPEED)
+        self._transition(State.RUNNING)
+        self._publish_event("System", "INFO", "리셋 완료 — RUNNING 복귀")
 
     def _emergency_stop(self):
         if self._stop_requested.is_set():
@@ -142,7 +178,13 @@ class VisiPickStateMachine:
         if self.state != State.RUNNING:
             return
 
-        threading.Thread(target=self._inspect_one, daemon=True).start()
+        # IR 센서가 카메라보다 앞이면 부품이 시야에 들어올 때까지 지연 후 추론.
+        if CAPTURE_DELAY_SEC > 0:
+            t = threading.Timer(CAPTURE_DELAY_SEC, self._inspect_one)
+            t.daemon = True
+            t.start()
+        else:
+            threading.Thread(target=self._inspect_one, daemon=True).start()
 
     # ── 게이트 예약 큐 ──────────────────────────────────────────
     def _schedule_gate(self, gate_no: int, delay_sec: float):
@@ -197,16 +239,41 @@ class VisiPickStateMachine:
         try:
             t0 = time.time()
 
-            frame_top  = self._cam_top.capture()
-            frame_side = self._cam_side.capture()
+            # 멀티프레임 보수 판정: INSPECT_WINDOW 초 동안 INSPECT_FRAMES 장 추론.
+            # 비정지 컨베이어로 각도가 바뀌므로, 불량이 한 프레임에만 보여도 DEFECT 로 잡는다.
+            frames = []
+            interval = INSPECT_WINDOW / max(INSPECT_FRAMES, 1)
+            for i in range(max(INSPECT_FRAMES, 1)):
+                tf = time.time()
+                frame_top  = self._cam_top.capture()
+                frame_side = self._cam_side.capture()
+                top  = self._clf.classify_top(frame_top)
+                side = self._pin.inspect_side(frame_side, top.get("part"))
+                result = self._decider.evaluate(top, side)
+                cls    = verdict_to_label(result.verdict)
+                frames.append({"cls": cls, "result": result, "top": top, "side": side,
+                               "frame_top": frame_top, "frame_side": frame_side})
+                # 윈도우 간격 맞춰 페이싱 (추론이 빠르면 잠깐 대기)
+                if i < INSPECT_FRAMES - 1:
+                    time.sleep(max(0.0, interval - (time.time() - tf)))
 
-            # 비전 → 두 딕셔너리 산출 (염재니)
-            top  = self._clf.classify_top(frame_top)              # {part, verdict_hint, confidence, raw_class}
-            side = self._pin.inspect_side(frame_side, top.get("part"))  # {verdict, pin_count, gap_cv, tip_y_range_px}
+            # 보수적 집계: DEFECT 하나라도 있으면 DEFECT 우선.
+            #   없으면 NEEDED/DUPLICATE(검출됨) 중 최고신뢰, 그것도 없으면 UNCERTAIN.
+            defects = [f for f in frames if f["cls"] == "DEFECT"]
+            valids  = [f for f in frames if f["cls"] in ("NEEDED", "DUPLICATE")]
+            if defects:
+                win = max(defects, key=lambda f: f["result"].confidence)
+            elif valids:
+                win = max(valids, key=lambda f: f["result"].confidence)
+            else:
+                win = max(frames, key=lambda f: f["result"].confidence)
 
-            # 판정 — 염재니 Decision 채택 (judge 폐기)
-            result = self._decider.evaluate(top, side)
-            cls    = verdict_to_label(result.verdict)             # NEEDED | DUPLICATE | DEFECT
+            result     = win["result"]
+            top        = win["top"]
+            side       = win["side"]
+            frame_top  = win["frame_top"]
+            frame_side = win["frame_side"]
+            cls        = win["cls"]
             action = gate_action_for(cls)                          # 김선진 게이트 매핑 그대로
             defect = defect_code_for(result, top, side)            # NONE | BENT_PIN | BROKEN | UNKNOWN
 
@@ -214,9 +281,11 @@ class VisiPickStateMachine:
             part_type  = to_korean(top.get("part")) or "UNKNOWN"
             confidence = round(float(result.confidence), 2)
             cycle_ms   = int((time.time() - t0) * 1000)
+            logger.debug(f"멀티프레임 판정: {[f['cls'] for f in frames]} → {cls}")
 
-            # 게이트 예약 — 부품이 카메라→게이트 구간을 이동하는 시간만큼 지연
-            if cls == "DUPLICATE":
+            # 게이트 예약 — 부품이 카메라→게이트 구간을 이동하는 시간만큼 지연.
+            # DUPLICATE(중복)·UNCERTAIN(보류)은 Gate1(반환 컨베이어), DEFECT(불량)은 Gate2.
+            if cls in ("DUPLICATE", "UNCERTAIN"):
                 self._schedule_gate(1, GATE1_DELAY)
             elif cls == "DEFECT":
                 self._schedule_gate(2, GATE2_DELAY)
@@ -297,45 +366,50 @@ class VisiPickStateMachine:
         threading.Thread(target=_loop, daemon=True).start()
         logger.info(f"더미 센서 트리거 루프 시작 ({DUMMY_INTERVAL}s 간격)")
 
-    # ── 메인 루프 ──────────────────────────────────────────────
-    def run(self):
-        logger.info("VisiPick 시스템 시작")
+    # ── 운행 시작 (컨1 ON + 더미 트리거) ───────────────────────
+    def start(self):
+        """RUNNING 진입 + 컨1 운행 + (더미 모드면) 센서 트리거 루프 기동.
+        run() 과 auto_test 가 공유하는 1회성 셋업."""
         self._transition(State.RUNNING)
         self._serial.set_conveyor_speed(CONVEYOR_SPEED)
-
         if DUMMY_MODE:
             self._start_dummy_trigger()
 
+    # ── 레시피 1사이클: 수집 → 이재 → 완료 ─────────────────────
+    def run_cycle(self) -> bool:
+        """레시피 한 세션을 끝까지 수행 (4종 수집 → 트레이 이재 → COMPLETE).
+        성공 True / 중단·예외 False. 검사는 센서 트리거가 비동기 구동, 여기선 게이트
+        큐만 흘리며 레시피 완성을 대기한다. (auto_test 가 사이클별로 호출)"""
+        if self.state != State.RUNNING:
+            self._transition(State.RUNNING)
+        self.cycle += 1
+        logger.info(f"{'='*40}")
+        logger.info(f"사이클 {self.cycle} — 레시피 세션 시작")
+        self._session_id = save_recipe_session(RECIPE_PARTS)
+        try:
+            while not self._recipe.is_complete() and not self._stop_requested.is_set():
+                self._flush_gate_queue()
+                time.sleep(0.05)
+            if self._stop_requested.is_set():
+                return False
+            logger.info(f"레시피 완성: {self._recipe.status()}")
+            self._tray_transfer()          # 컨1은 계속 운행, 컨3가 다음 빈 트레이 공급
+            self._transition(State.COMPLETE)
+            logger.info(f"사이클 {self.cycle} 완료!")
+            return True
+        except Exception as e:
+            self._transition(State.ERROR)
+            logger.error(f"사이클 오류: {e}")
+            return False
+
+    # ── 메인 루프 ──────────────────────────────────────────────
+    def run(self):
+        logger.info("VisiPick 시스템 시작")
+        self.start()
         while self.cycle < TOTAL_CYCLES and not self._stop_requested.is_set():
-            self.cycle += 1
-            logger.info(f"{'='*40}")
-            logger.info(f"사이클 {self.cycle}/{TOTAL_CYCLES} — 레시피 세션 시작")
-
-            self._session_id = save_recipe_session(RECIPE_PARTS)
-
-            try:
-                # 레시피 완성까지 게이트 큐만 처리 — 검사는 센서 트리거가 구동
-                while not self._recipe.is_complete() and not self._stop_requested.is_set():
-                    self._flush_gate_queue()
-                    time.sleep(0.05)
-
-                if self._stop_requested.is_set():
-                    break
-
-                logger.info(f"레시피 완성: {self._recipe.status()}")
-                self._tray_transfer()          # 컨1은 계속 운행, 컨3가 다음 빈 트레이 공급
-                self._transition(State.COMPLETE)
-                logger.info(f"사이클 {self.cycle} 완료!")
-                time.sleep(1)
-
-                if self.cycle < TOTAL_CYCLES and not self._stop_requested.is_set():
-                    self._transition(State.RUNNING)
-
-            except Exception as e:
-                self._transition(State.ERROR)
-                logger.error(f"오류: {e}")
+            if not self.run_cycle():
                 break
-
+            time.sleep(1)
         logger.info(f"전체 {self.cycle}회 사이클 종료")
         self._shutdown()
 
