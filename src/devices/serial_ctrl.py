@@ -11,6 +11,8 @@ SERIAL_PORT = config["serial"]["port"]
 SERIAL_BAUD = config["serial"]["baudrate"]
 ESP32_HOST  = config["mock"]["esp32"]["host"]
 ESP32_PORT  = config["mock"]["esp32"]["port"]
+# 컨3 트레이 1칸 구동 시간(ms). None 이면 펌웨어 기본값(2초) 사용.
+TRAY_ADVANCE_MS = config.get("conveyor", {}).get("tray_advance_ms")
 
 
 class SerialController:
@@ -76,9 +78,13 @@ class SerialController:
         return self._send({"type": "conveyor_cmd", "action": "set_speed", "speed": speed_cm_per_s, "timestamp": _now()})
 
     def advance_tray(self) -> bool:
-        """컨3(다음 빈 트레이 공급 컨베이어) 2초 구동 — 트레이가 찰 때마다 다음 빈 트레이를 수집 위치로 이동.
-        펌웨어: tray_cmd → B모터(CONV3_A/B) 2초 ON 후 자동 정지."""
-        return self._send({"type": "tray_cmd", "action": "advance", "timestamp": _now()})
+        """컨3(다음 빈 트레이 공급 컨베이어) 구동 — 트레이가 찰 때마다 다음 빈 트레이를 수집 위치로 이동.
+        구동 시간은 config.conveyor.tray_advance_ms(ms)로 전달 → 펌웨어가 그 시간만큼 ON 후 자동 정지.
+        (config 에 없으면 펌웨어 기본 2초)."""
+        msg = {"type": "tray_cmd", "action": "advance", "timestamp": _now()}
+        if TRAY_ADVANCE_MS is not None:
+            msg["duration_ms"] = TRAY_ADVANCE_MS
+        return self._send(msg)
     
     def emergency_stop(self) -> bool:
         """비상정지 — 컨1·컨2·컨3·게이트 전체 정지 (펌웨어 emergencyStop())."""

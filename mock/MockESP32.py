@@ -65,14 +65,16 @@ def handle(conn, addr):
                         conn.send((json.dumps(ack) + "\n").encode())
                         logger.info(f"응답: {ack}")
                     elif msg_type == "tray_cmd":
+                        dur = msg.get("duration_ms", 2000)   # PC가 보낸 구동시간(ms), 없으면 기본 2초
                         ack = {
                             "type": "tray_ack",
                             "action": msg.get("action"),
+                            "duration_ms": dur,
                             "status": "ok",
                             "timestamp": datetime.now().isoformat(),
                         }
                         conn.send((json.dumps(ack) + "\n").encode())
-                        logger.info(f"응답: {ack}")
+                        logger.info(f"응답: {ack} (컨3 {dur}ms 구동)")
                     elif msg_type == "emergency_stop":
                         ack = {
                             "type": "estop_ack",

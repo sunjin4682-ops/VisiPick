@@ -66,7 +66,9 @@
     "speed_cm_per_s": 1.5,
     "camera_to_gate1_cm": 30,
     "camera_to_gate2_cm": 45,
-    "gate_delay_offset_sec": -4.5
+    "gate_delay_offset_sec": -7.5,
+    "last_part_drop_sec": 38.0,
+    "tray_advance_ms": 2000
   },
 
   "serial": {

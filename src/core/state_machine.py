@@ -38,6 +38,13 @@ _speed       = _conv_cfg.get("speed_cm_per_s", 1.5)
 _gate_offset = _conv_cfg.get("gate_delay_offset_sec", 0.0)
 GATE1_DELAY  = _conv_cfg.get("camera_to_gate1_cm", 30) / _speed + _gate_offset
 GATE2_DELAY  = _conv_cfg.get("camera_to_gate2_cm", 45) / _speed + _gate_offset
+# 레시피 완성 후, 마지막(4번째) 양품이 카메라→컨1 끝단까지 가서 트레이에 낙하할
+# 때까지 대기. 이 시간이 0이면 부품이 들어가기 전에 트레이가 이동해버린다.
+# camera_to_tray_cm/speed 로 계산하거나, last_part_drop_sec 로 직접 실측 입력(우선).
+LAST_DROP_WAIT = _conv_cfg.get(
+    "last_part_drop_sec",
+    _conv_cfg.get("camera_to_tray_cm", 0) / _speed,
+)
 DEBOUNCE_SEC = config.get("sensor", {}).get("debounce_sec", 0.5)
 # IR 트리거 → 카메라 추론 사이 지연(초). IR 센서가 카메라보다 앞(상류)에 있을 때
 # 부품이 카메라 시야에 들어올 때까지 기다린다. 0이면 즉시 추론(센서=카메라 위치).
@@ -174,10 +181,13 @@ class VisiPickStateMachine:
         now = time.time()
         with self._sensor_lock:
             if now - self._last_trigger < DEBOUNCE_SEC:
+                logger.info("[진단] 트리거 수신 — 디바운스로 무시")
                 return
             self._last_trigger = now
 
+        logger.info(f"[진단] 트리거 수신 (state={self.state.value}, delay={CAPTURE_DELAY_SEC}s 후 검사)")
         if self.state != State.RUNNING:
+            logger.info(f"[진단] state가 RUNNING 아님 → 검사 안 함")
             return
 
         # IR 센서가 카메라보다 앞이면 부품이 시야에 들어올 때까지 지연 후 추론.
@@ -237,11 +247,13 @@ class VisiPickStateMachine:
     # ── 부품 1개 검사 (센서 트리거 → 데몬 스레드에서 실행) ────
     def _inspect_one(self):
         if not self._inspect_enabled:
+            logger.info("[진단] inspect_enabled=False → 검사 안 함")
             return
         if not self._inspect_lock.acquire(blocking=False):
-            logger.debug("이전 검사 진행 중 — 이번 트리거 무시")
+            logger.info("[진단] 이전 검사 진행 중(락 점유) — 이번 트리거 무시")
             return
         try:
+            logger.info("[진단] 검사 시작 (멀티프레임)")
             t0 = time.time()
 
             # 멀티프레임 보수 판정: INSPECT_WINDOW 초 동안 INSPECT_FRAMES 장 추론.
@@ -406,6 +418,17 @@ class VisiPickStateMachine:
             if self._stop_requested.is_set():
                 return False
             logger.info(f"레시피 완성: {self._recipe.status()}")
+            # 마지막 양품이 카메라 판정 시점엔 아직 컨1 위에 있다 — 트레이에 낙하할
+            # 때까지 대기(그동안 게이트 큐는 계속 처리). 이걸 안 하면 4번째 부품이
+            # 들어가기 전에 트레이가 이동한다.
+            if LAST_DROP_WAIT > 0:
+                logger.info(f"마지막 부품 낙하 대기 {LAST_DROP_WAIT:.1f}s")
+                _until = time.time() + LAST_DROP_WAIT
+                while time.time() < _until and not self._stop_requested.is_set():
+                    self._flush_gate_queue()
+                    time.sleep(0.05)
+                if self._stop_requested.is_set():
+                    return False
             self._tray_transfer()          # 컨1은 계속 운행, 컨3가 다음 빈 트레이 공급
             self._transition(State.COMPLETE)
             logger.info(f"사이클 {self.cycle} 완료!")

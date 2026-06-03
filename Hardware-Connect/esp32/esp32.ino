@@ -76,7 +76,8 @@ const float MM_PER_STEP = 0.002867;
 // ── L9110S 컨베이어 상태 ──────────────────
 bool conv3Running = false;
 unsigned long conv3Timer = 0;
-#define CONV3_RUN_TIME 2000  // 2초
+#define CONV3_RUN_TIME 2000          // 기본 2초 (tray_cmd 에 duration_ms 없을 때 폴백)
+unsigned long conv3RunTime = CONV3_RUN_TIME;  // 실제 사용값 — PC가 duration_ms 로 덮어씀
 
 // ── 딜레이 예약 구조체 ────────────────────
 struct GateTimer {
@@ -125,7 +126,7 @@ void stopConveyor();
 void emergencyStop();
 void conv2Start();
 void conv2Stop();
-void startConv3();
+void startConv3(unsigned long runMs = CONV3_RUN_TIME);
 void updateConv3();
 
 // ── 비상 정지 ─────────────────────────────
@@ -181,7 +182,8 @@ void conv2Stop() {
 }
 
 // ── B모터 컨베이어 (다음 빈 트레이 공급, 2초) — 무음 헬퍼 ─
-void startConv3() {
+void startConv3(unsigned long runMs) {
+  conv3RunTime = (runMs > 0) ? runMs : CONV3_RUN_TIME;   // 0/미지정이면 기본값
   digitalWrite(CONV3_A, HIGH);
   digitalWrite(CONV3_B, LOW);
   conv3Running = true;
@@ -189,7 +191,7 @@ void startConv3() {
 }
 
 void updateConv3() {
-  if (conv3Running && millis() - conv3Timer >= CONV3_RUN_TIME) {
+  if (conv3Running && millis() - conv3Timer >= conv3RunTime) {
     digitalWrite(CONV3_A, LOW);
     digitalWrite(CONV3_B, LOW);
     conv3Running = false;
@@ -376,7 +378,8 @@ void parseJsonCommand(const String& cmd) {
     Serial.println();
   }
   else if (strcmp(type, "tray_cmd") == 0) {
-    startConv3();                            // 컨3 — 다음 빈 트레이 공급 (2초)
+    unsigned long runMs = doc["duration_ms"] | CONV3_RUN_TIME;  // PC가 보낸 값 우선, 없으면 기본 2초
+    startConv3(runMs);                       // 컨3 — 다음 빈 트레이 공급
     JsonDocument res;
     res["type"]      = "tray_ack";
     res["action"]    = (const char*)(doc["action"] | "advance");
