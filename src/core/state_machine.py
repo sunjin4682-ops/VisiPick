@@ -54,6 +54,10 @@ CAPTURE_DELAY_SEC = config.get("sensor", {}).get("trigger_to_capture_sec", 0.0)
 # 하나라도 불량(DEFECT)이면 DEFECT. 각도에 따라 불량이 한 프레임에만 보여도 잡는다.
 INSPECT_FRAMES = int(config["vision"].get("inspect_frames", 5))
 INSPECT_WINDOW = float(config["vision"].get("inspect_window_sec", 1.0))
+# 영상 연속 송출: 카메라 최신 프레임을 이 fps 로 frame_bus 에 계속 발행(검사와 별개).
+# 0 이면 연속 송출 끔(검사 시점에만 프레임 갱신).
+STREAM_FPS    = float(config.get("stream", {}).get("publish_fps", 10))
+STREAM_LABEL_HOLD = float(config.get("stream", {}).get("label_hold_sec", 2.0))
 
 
 class State(Enum):
@@ -73,6 +77,9 @@ class VisiPickStateMachine:
         self._inspect_enabled = True
         self._running        = True
         self._stop_requested = threading.Event()
+        # 영상 송출 라벨(검사 결과를 잠깐 화면에 얹기 위한 상태)
+        self._stream_label       = None   # (text, (b,g,r))
+        self._stream_label_until = 0.0
 
         # 센서 디바운스
         self._last_trigger = 0.0
@@ -338,13 +345,16 @@ class VisiPickStateMachine:
 
     # ── 프레임 버스 발행 (MJPEG 송출용) ───────────────────────
     def _publish_frames(self, frame_top, frame_side, cls, top, conf):
-        """검사 프레임에 ASCII 라벨만 가볍게 얹어 frame_bus 에 발행.
-        (바운딩 박스 오버레이가 필요하면 live_yolo --publish 경로 사용 — 연속·박스 포함)"""
-        if frame_top is not None:
+        """검사 결과 라벨을 STREAM_LABEL_HOLD 초간 영상 송출 스레드가 얹도록 등록.
+        (top 프레임 자체는 _start_stream_loop 가 연속 발행 — 여기선 라벨만 갱신)
+        측면(side)은 연속 송출이 없으므로 검사 시점에 직접 발행."""
+        color = (0, 0, 255) if cls == "DEFECT" else \
+                (0, 165, 255) if cls == "DUPLICATE" else (0, 200, 0)
+        label = f"{top.get('raw_class', '?')} {cls} {conf:.2f}"
+        self._stream_label       = (label, color)
+        self._stream_label_until = time.time() + STREAM_LABEL_HOLD
+        if STREAM_FPS <= 0 and frame_top is not None:   # 연속 송출 꺼져있으면 검사 프레임이라도 발행
             import cv2
-            color = (0, 0, 255) if cls == "DEFECT" else \
-                    (0, 165, 255) if cls == "DUPLICATE" else (0, 200, 0)
-            label = f"{top.get('raw_class', '?')} {cls} {conf:.2f}"
             cv2.putText(frame_top, label, (10, 28),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
             frame_bus.publish("top", frame_top)
@@ -397,8 +407,37 @@ class VisiPickStateMachine:
         run() 과 auto_test 가 공유하는 1회성 셋업."""
         self._transition(State.RUNNING)
         self._serial.set_conveyor_speed(CONVEYOR_SPEED)
+        self._start_stream_loop()          # 영상 연속 송출 (검사와 별개)
         if DUMMY_MODE:
             self._start_dummy_trigger()
+
+    # ── 영상 연속 송출 스레드 (MJPEG 소스) ─────────────────────
+    def _start_stream_loop(self):
+        """카메라 최신 프레임을 STREAM_FPS 로 frame_bus 에 계속 발행 →
+        api_server /video/top 가 부드러운 실시간 영상으로 송출.
+        검사 결과 라벨은 STREAM_LABEL_HOLD 초 동안 화면에 얹는다."""
+        if DUMMY_MODE or STREAM_FPS <= 0:
+            return
+        import cv2
+        interval = 1.0 / STREAM_FPS
+
+        def _loop():
+            while self._running:
+                t = time.time()
+                try:
+                    frame = self._cam_top.capture_full()   # 원본 1280x720 (크롭 안 함)
+                    if frame is not None:
+                        if self._stream_label and time.time() < self._stream_label_until:
+                            text, color = self._stream_label
+                            cv2.putText(frame, text, (10, 28),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                        frame_bus.publish("top", frame)
+                except Exception as e:                 # 송출은 실패해도 검사에 영향 없게
+                    logger.warning(f"영상 송출 오류(무시): {e}")
+                time.sleep(max(0.0, interval - (time.time() - t)))
+
+        threading.Thread(target=_loop, daemon=True).start()
+        logger.info(f"영상 송출 스레드 시작 ({STREAM_FPS:.0f}fps)")
 
     # ── 레시피 1사이클: 수집 → 이재 → 완료 ─────────────────────
     def run_cycle(self) -> bool:

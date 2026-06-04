@@ -59,7 +59,9 @@
   "stream": {
     "dir": "data/stream",
     "jpeg_quality": 70,
-    "fps": 10
+    "fps": 10,
+    "publish_fps": 10,
+    "label_hold_sec": 2.0
   },
 
   "conveyor": {
@@ -67,7 +69,7 @@
     "camera_to_gate1_cm": 30,
     "camera_to_gate2_cm": 45,
     "gate_delay_offset_sec": -7.5,
-    "last_part_drop_sec": 38.0,
+    "last_part_drop_sec": 35.0,
     "tray_advance_ms": 2000
   },
 

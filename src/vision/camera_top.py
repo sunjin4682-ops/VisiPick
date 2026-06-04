@@ -49,7 +49,16 @@ class CameraTop:
                 time.sleep(0.005)
 
     def capture(self):
-        """가장 최신 프레임 반환. 더미 모드/미수신: None."""
+        """검사용 최신 프레임 반환(SQUARE 설정 시 정사각 크롭). 더미/미수신: None."""
+        frame = self.capture_full()
+        if frame is None:
+            return None
+        if SQUARE:                       # 학습셋(512x512 정사각) 기하에 맞춤
+            frame = center_square(frame)
+        return frame
+
+    def capture_full(self):
+        """크롭하지 않은 원본 최신 프레임 반환(예: 영상 송출용 1280x720). 더미/미수신: None."""
         if DUMMY_MODE or self._cap is None:
             return None
         with self._lock:
@@ -57,8 +66,6 @@ class CameraTop:
         if frame is None:
             logger.warning("Camera1 최신 프레임 없음")
             return None
-        if SQUARE:                       # 학습셋(512x512 정사각) 기하에 맞춤
-            frame = center_square(frame)
         return frame
 
     def release(self):
