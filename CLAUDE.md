@@ -277,7 +277,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ **컨3 이동시간 config화** `conveyor.tray_advance_ms` — `tray_cmd.duration_ms`로 전송, `esp32.ino`/MockESP32가 그 시간만큼 구동(없으면 기본 2초). **펌웨어 1회 재업로드 필요**.
 - 🔄 진단 중: 실가동 시 검사 로그 미출력 케이스 — `[진단]` INFO 로그로 트리거→검사 추적 중.
 
-#### Phase 1 추가 (2026-06-05)
+#### Phase 1 추가 (2026-06-04)
 - ✅ **MJPEG 실시간 영상** — `frame_bus.py`(파일 기반 프레임 버스) + `api_server` `/video/{top,side}`·`/snapshot/{name}`. `state_machine` 연속 송출 스레드(`stream.publish_fps`, 검사 라벨 오버레이 `label_hold_sec`). 송출=원본 1280x720(`camera_top.capture_full`), 검사=정사각 크롭. Windows `os.replace` 충돌 재시도.
 - ✅ **비상정지 = 일시정지(종료X)** — `run()`/`run_cycle` 대기 루프가 정지 시 종료 대신 해제 대기. 재개: **컨베이어 시작**(래치 해제+RUNNING) + **비전 시작**(검사 재활성화). 진행 중 레시피/트레이 유지.
 - ✅ **복수 불량 전송** — IC 의 Pinbent+Broken 등 2종 이상 시 `payload.defect_codes`(리스트) 추가. `classifier.defect_classes` + `decision.defect_codes_for`. `defect_code`(단일)는 하위호환 유지.
