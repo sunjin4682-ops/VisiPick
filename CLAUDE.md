@@ -230,7 +230,7 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 ### GitHub
 - 저장소: https://github.com/sunjin4682-ops/VisiPick
 - 브랜치: `feat/jetson-migration`
-- 마지막 커밋: `0a656be` (feat(tray): 컨3 이동시간 config화 + 마지막 부품 낙하 대기 + 진단 로그)
+- 마지막 커밋: `835a796` (feat(fsm,vision): 비상정지 일시정지화 + 복수 불량 전송)
 
 ### 설계 버전
 - **V6.5** (2026-06-03 통합 로드맵 반영) — 헤드리스 우선 통합 래더
@@ -276,6 +276,12 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 - ✅ **트레이 이재 순서** — 컨3 1칸 전진 → 로봇 AGV 이재 → AGV 출발.
 - ✅ **컨3 이동시간 config화** `conveyor.tray_advance_ms` — `tray_cmd.duration_ms`로 전송, `esp32.ino`/MockESP32가 그 시간만큼 구동(없으면 기본 2초). **펌웨어 1회 재업로드 필요**.
 - 🔄 진단 중: 실가동 시 검사 로그 미출력 케이스 — `[진단]` INFO 로그로 트리거→검사 추적 중.
+
+#### Phase 1 추가 (2026-06-05)
+- ✅ **MJPEG 실시간 영상** — `frame_bus.py`(파일 기반 프레임 버스) + `api_server` `/video/{top,side}`·`/snapshot/{name}`. `state_machine` 연속 송출 스레드(`stream.publish_fps`, 검사 라벨 오버레이 `label_hold_sec`). 송출=원본 1280x720(`camera_top.capture_full`), 검사=정사각 크롭. Windows `os.replace` 충돌 재시도.
+- ✅ **비상정지 = 일시정지(종료X)** — `run()`/`run_cycle` 대기 루프가 정지 시 종료 대신 해제 대기. 재개: **컨베이어 시작**(래치 해제+RUNNING) + **비전 시작**(검사 재활성화). 진행 중 레시피/트레이 유지.
+- ✅ **복수 불량 전송** — IC 의 Pinbent+Broken 등 2종 이상 시 `payload.defect_codes`(리스트) 추가. `classifier.defect_classes` + `decision.defect_codes_for`. `defect_code`(단일)는 하위호환 유지.
+- ✅ **WPF 인수인계** — MQTT(상태)/REST(제어)/MJPEG(영상) 정리. Tailscale 로 유선/무선 다른 망 PC 접속 가능.
 
 ### 다음 작업
 - [ ] 실가동 검사 로그 미출력 원인 규명 (트리거 수신/락 점유/카메라 프레임 — `[진단]` 로그 확인)

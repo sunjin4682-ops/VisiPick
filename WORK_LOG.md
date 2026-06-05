@@ -956,6 +956,43 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 
 ---
 
+## 2026-06-05
+
+> **이날 목표:** WPF용 MJPEG 실시간 영상, 비상정지 동작 개선, 복수 불량 전송
+
+### 완료된 작업 ✅
+
+#### MJPEG 실시간 영상 송출 (V6.4 영상=MJPEG)
+- `frame_bus.py` 신규: 파일 기반 프레임 버스(프로세스 분리 — 카메라 점유 프로세스 ↔ 송출 프로세스). 원자적 교체.
+- `api_server`: `GET /video/{top,side}`(MJPEG 스트림), `GET /snapshot/{name}`(단일 JPEG).
+- `state_machine`: 연속 송출 스레드(`_start_stream_loop`) — 카메라 최신 프레임을 `stream.publish_fps`(10)로 계속 발행 → state_machine+api_server 만으로 부드러운 영상. 검사 결과 라벨은 `label_hold_sec`(2초) 동안 오버레이.
+- `camera_top.capture_full()`: 송출은 **원본 1280x720**, 검사(`capture`)는 정사각 크롭으로 분리.
+- Windows `os.replace` 가 reader(api_server)와 충돌(PermissionError) 시 5회 재시도 + 송출 루프 try/except로 스레드 보호.
+- WPF 인수인계: MQTT(상태)/REST(제어)/MJPEG(영상) 정리. **Tailscale**로 유선/무선 다른 망 PC 간 접속(192.168 직접 불가 시).
+
+#### 비상정지 = 일시정지 (프로그램 종료 X)
+- 기존: 비상정지 → `run_cycle` False 반환 → `run()` break → `_shutdown()` → **프로그램 종료**.
+- 변경: `run()`/`run_cycle` 대기 루프가 `_stop_requested` 시 return 대신 **해제 대기**(`_running` False 일 때만 실제 종료).
+- 재개: **컨베이어 시작**(`conveyor/cmd start` → 래치 해제 + RUNNING) + **비전 시작**(`vision/cmd start` → 검사 재활성화). 진행 중이던 레시피/트레이 카운트 유지.
+- `_emergency_stop`에 `inspect_enabled=False` 추가(재개 시 비전 시작 필요). 낙하 대기 중 정지 시 데드라인 연장으로 대기시간 보존.
+
+#### 복수 불량 전송
+- IC 처럼 한 부품에 Pinbent+Broken 2종 불량이 잡히는 경우 모두 전송.
+- `classifier.classify()`가 한 프레임의 **모든 불량 클래스**(`ClassifyResult.defect_classes`) 수집 → `classify_top`에 노출.
+- `decision.defect_codes_for(raw_classes, side)` / `defect_code_of()` 헬퍼 추가.
+- `state_machine`이 멀티프레임 전체에서 불량 클래스 합집합 → `payload.defect_codes`(리스트) 추가. **`defect_code`(단일)는 DB·하위호환 유지**.
+- 예: `["BENT_PIN", "BROKEN"]`. WPF는 `defect_codes` 배열로 2종 모두 표시 가능.
+
+### 이슈/메모 ⚠️
+- 컨베이어 속도 가변 + 타이밍 자동 스케일은 검토했으나 보류(고정 지연 분리·재튜닝 부담). 단일 속도 튜닝(A안) 또는 거리/속도+고정지연(B+안) 중 선택 필요 시 재개.
+- 영상 송출 시 카메라는 한 프로세스만 점유 — state_machine 운행 중엔 live_yolo --publish 동시 실행 금지.
+
+### 다음 할 일
+- [ ] 비상정지→재개 실하드웨어 검증
+- [ ] 게이트/낙하/트레이 타이밍 실측 튜닝 마무리
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD
