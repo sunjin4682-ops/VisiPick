@@ -48,6 +48,7 @@ class ClassifyResult:
     bbox: Optional[Tuple[int, int, int, int]] = None  # x,y,w,h
     features: Dict[str, float] = field(default_factory=dict)
     raw_class: Optional[str] = None
+    defect_classes: List[str] = field(default_factory=list)  # 한 프레임에서 검출된 '모든' 불량 클래스
     mode: str = "classical"
 
 
@@ -198,6 +199,7 @@ class _YoloClassifier:
         # 단일 argmax 를 쓰면 신뢰도 높은 part 박스가 불량 박스를 가린다 → 전수 검사.
         part_idx: Optional[int] = None       # 최고신뢰 part 박스
         defect_idx: Optional[int] = None     # 최고신뢰 defect 박스 (defect_min_conf 이상만)
+        defect_classes: List[str] = []       # 검출된 '모든' 불량 클래스(중복 제거, 한 부품에 2종 가능)
         for i in range(len(confs)):
             name = self.names.get(int(cls_ids[i]), str(int(cls_ids[i])))
             m = self.class_map.get(name, {})
@@ -207,6 +209,8 @@ class _YoloClassifier:
             elif m.get("verdict") == "REJECT" and confs[i] >= self.defect_min_conf:
                 if defect_idx is None or confs[i] > confs[defect_idx]:
                     defect_idx = i
+                if name not in defect_classes:
+                    defect_classes.append(name)
 
         # 매핑된 part/defect 가 하나도 없으면(미지 클래스만) → 최고신뢰 박스로 폴백
         if part_idx is None and defect_idx is None:
@@ -235,7 +239,8 @@ class _YoloClassifier:
                 verdict_hint="REJECT",
                 confidence=float(confs[defect_idx]),
                 bbox=(int(dx1), int(dy1), int(dx2 - dx1), int(dy2 - dy1)),  # 불량 위치
-                raw_class=dname,                            # Pinbent / Broken / Dented
+                raw_class=dname,                            # Pinbent / Broken / Dented (최고신뢰)
+                defect_classes=defect_classes,              # 검출된 모든 불량(예: [Pinbent, Broken])
                 mode="yolo",
             )
 
@@ -327,10 +332,11 @@ class Classifier:
         """
         r = self.classify(frame)
         return {
-            "part":         r.part,
-            "verdict_hint": r.verdict_hint,
-            "confidence":   r.confidence,
-            "raw_class":    r.raw_class,
+            "part":           r.part,
+            "verdict_hint":   r.verdict_hint,
+            "confidence":     r.confidence,
+            "raw_class":      r.raw_class,
+            "defect_classes": r.defect_classes,   # 검출된 모든 불량 클래스(예: [Pinbent, Broken])
         }
 
     # ── 더미 폴백 (장비/카메라 없이 시연) ─────────────────────────────────

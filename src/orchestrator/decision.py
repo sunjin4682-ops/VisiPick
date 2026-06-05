@@ -147,6 +147,28 @@ def defect_code_for(result: DecisionResult, top: dict, side: dict) -> str:
     return "BROKEN"
 
 
+def defect_code_of(raw_class: str) -> str:
+    """단일 불량 클래스명 → DB DefectCode. (Pinbent→BENT_PIN, Broken/Dented→BROKEN)"""
+    if raw_class == "Pinbent":
+        return "BENT_PIN"
+    if raw_class in ("Broken", "Dented"):
+        return "BROKEN"
+    return "UNKNOWN"
+
+
+def defect_codes_for(raw_classes, side: dict) -> list:
+    """검출된 모든 불량 클래스(+측면 핀검사) → 중복 없는 DefectCode 리스트.
+    예: [Pinbent, Broken] → ["BENT_PIN", "BROKEN"]."""
+    codes: list = []
+    for rc in (raw_classes or []):
+        c = defect_code_of(rc)
+        if c not in codes:
+            codes.append(c)
+    if (side.get("verdict") or "").upper() == "BENT" and "BENT_PIN" not in codes:
+        codes.append("BENT_PIN")
+    return codes
+
+
 def gate_action_for(classification: str) -> str:
     """classification → gate_action 문자열 (김선진 인프라 그대로)."""
     return _GATE_ACTION.get(classification, "PASS_THROUGH")

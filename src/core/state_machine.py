@@ -10,7 +10,7 @@ from src.vision.camera_top import CameraTop
 from src.vision.camera_side import CameraSide
 from src.vision.classifier import Classifier
 from src.vision.pin_inspector import PinInspector
-from src.orchestrator.decision import Decision, gate_action_for, verdict_to_label, defect_code_for
+from src.orchestrator.decision import Decision, gate_action_for, verdict_to_label, defect_code_for, defect_codes_for
 from src.utils.part_map import to_korean
 from src.orchestrator.recipe_mgr import RecipeManager
 from src.orchestrator.tray_mgr import TrayManager
@@ -142,8 +142,15 @@ class VisiPickStateMachine:
                 self._inspect_enabled = (action == "start")
                 logger.info(f"비전 {'시작' if action=='start' else '중지'}")
             elif topic == "visipick/conveyor/cmd":
-                self._serial.set_conveyor_speed(CONVEYOR_SPEED if action == "start" else 0.0)
-                logger.info(f"컨베이어 {'시작' if action=='start' else '중지'}")
+                if action == "start":
+                    self._stop_requested.clear()         # 비상정지 래치 해제(재개)
+                    self._serial.set_conveyor_speed(CONVEYOR_SPEED)
+                    if self.state == State.EMERGENCY_STOP:
+                        self._transition(State.RUNNING)
+                    logger.info("컨베이어 시작 (비상정지 해제)")
+                else:
+                    self._serial.set_conveyor_speed(0.0)
+                    logger.info("컨베이어 정지")
             elif topic == "visipick/gate/cmd":         # 수동 게이트 푸시 (/api/gate/{n}/push)
                 gate = int(data.get("gate"))
                 self._serial.push_gate(gate)
@@ -174,8 +181,9 @@ class VisiPickStateMachine:
     def _emergency_stop(self):
         if self._stop_requested.is_set():
             return
-        logger.warning("비상정지 요청")
+        logger.warning("비상정지 요청 — 일시정지(프로그램 유지). 재개: 컨베이어 시작 + 비전 시작")
         self._stop_requested.set()
+        self._inspect_enabled = False        # 검사 중지 — 재개 시 '비전 시작' 필요
         self._serial.emergency_stop()       # 컨1·컨2·컨3·게이트 전체 정지
         with self._gate_lock:
             self._gate_queue.clear()
@@ -299,7 +307,18 @@ class VisiPickStateMachine:
             frame_side = win["frame_side"]
             cls        = win["cls"]
             action = gate_action_for(cls)                          # 김선진 게이트 매핑 그대로
-            defect = defect_code_for(result, top, side)            # NONE | BENT_PIN | BROKEN | UNKNOWN
+            defect = defect_code_for(result, top, side)            # 주 불량 1개(NONE|BENT_PIN|BROKEN|UNKNOWN)
+            # 한 부품에 불량이 2종 이상(예: IC 의 Pinbent+Broken) 잡힐 수 있어, 멀티프레임
+            # 전체에서 검출된 모든 불량 클래스를 합집합으로 모아 전부 전송한다.
+            if cls == "DEFECT":
+                _all_defcls = []
+                for f in frames:
+                    for dc in f["top"].get("defect_classes", []):
+                        if dc not in _all_defcls:
+                            _all_defcls.append(dc)
+                defect_codes = defect_codes_for(_all_defcls, side)
+            else:
+                defect_codes = []
 
             # 부품명: 영문(비전) → 한글(표시/레시피/DB). 단일 변환 지점 = part_map
             part_type  = to_korean(top.get("part")) or "UNKNOWN"
@@ -324,7 +343,8 @@ class VisiPickStateMachine:
                 "recipe_session_id": self._session_id,
                 "part_type":         part_type,
                 "classification":    cls,
-                "defect_code":       defect,
+                "defect_code":       defect,        # 주 불량 1개(DB·하위호환)
+                "defect_codes":      defect_codes,  # 검출된 모든 불량(예: ["BENT_PIN","BROKEN"])
                 "confidence":        confidence,
                 "gate_action":       action,
                 "cycle_time_ms":     cycle_ms,
@@ -451,10 +471,13 @@ class VisiPickStateMachine:
         logger.info(f"사이클 {self.cycle} — 레시피 세션 시작")
         self._session_id = save_recipe_session(RECIPE_PARTS)
         try:
-            while not self._recipe.is_complete() and not self._stop_requested.is_set():
+            while not self._recipe.is_complete() and self._running:
+                if self._stop_requested.is_set():
+                    time.sleep(0.2)        # 비상정지 — 종료 않고 해제(재개) 대기
+                    continue
                 self._flush_gate_queue()
                 time.sleep(0.05)
-            if self._stop_requested.is_set():
+            if not self._running:          # 실제 프로그램 종료 시에만 빠져나감
                 return False
             logger.info(f"레시피 완성: {self._recipe.status()}")
             # 마지막 양품이 카메라 판정 시점엔 아직 컨1 위에 있다 — 트레이에 낙하할
@@ -463,10 +486,14 @@ class VisiPickStateMachine:
             if LAST_DROP_WAIT > 0:
                 logger.info(f"마지막 부품 낙하 대기 {LAST_DROP_WAIT:.1f}s")
                 _until = time.time() + LAST_DROP_WAIT
-                while time.time() < _until and not self._stop_requested.is_set():
+                while time.time() < _until and self._running:
+                    if self._stop_requested.is_set():
+                        _until += 0.2     # 정지 동안엔 데드라인도 미뤄 낙하대기 시간 보존
+                        time.sleep(0.2)
+                        continue
                     self._flush_gate_queue()
                     time.sleep(0.05)
-                if self._stop_requested.is_set():
+                if not self._running:
                     return False
             self._tray_transfer()          # 컨1은 계속 운행, 컨3가 다음 빈 트레이 공급
             self._transition(State.COMPLETE)
@@ -481,10 +508,16 @@ class VisiPickStateMachine:
     def run(self):
         logger.info("VisiPick 시스템 시작")
         self.start()
-        while self.cycle < TOTAL_CYCLES and not self._stop_requested.is_set():
-            if not self.run_cycle():
-                break
-            time.sleep(1)
+        try:
+            while self.cycle < TOTAL_CYCLES and self._running:
+                if self._stop_requested.is_set():
+                    time.sleep(0.2)        # 비상정지 — 종료 않고 해제(재개) 대기
+                    continue
+                if not self.run_cycle():
+                    break                  # 실제 종료(_running=False)/오류일 때만
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Ctrl+C — 종료")
         logger.info(f"전체 {self.cycle}회 사이클 종료")
         self._shutdown()
 
