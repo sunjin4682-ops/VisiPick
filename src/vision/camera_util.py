@@ -45,11 +45,12 @@ def apply_camera_controls(cap, cam: dict):
             cap.set(prop, float(ctrl[key]))
 
 
-def open_top_camera(cam: dict, index=None):
-    """config.cameras.top(cam) 설정으로 VideoCapture 를 열어 반환.
+def open_camera(cam: dict, index=None):
+    """config.cameras.* (cam) 설정으로 VideoCapture 를 열어 반환 (상부·측면 공용).
 
     Windows 실 카메라는 DSHOW 백엔드라야 노출/화벨 수동 제어가 먹는다.
     index 를 주면 config 의 index 대신 사용 (라이브뷰 --source 대응).
+    cam 에 width/height/fps/controls 가 없으면 apply_camera_controls 의 기본값 적용.
     """
     idx = cam["index"] if index is None else index
     if sys.platform == "win32":
@@ -58,6 +59,43 @@ def open_top_camera(cam: dict, index=None):
         cap = cv2.VideoCapture(idx)
     apply_camera_controls(cap, cam)
     return cap
+
+
+# 하위호환 별칭 (camera_top.py / live_yolo.py 가 사용)
+open_top_camera = open_camera
+
+
+def _delivers_frame(cap, tries: int = 15) -> bool:
+    """isOpened 만으론 부족 — 실제로 프레임이 들어오는지 확인(placeholder/빈 장치 배제)."""
+    if not cap.isOpened():
+        return False
+    for _ in range(tries):
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return True
+    return False
+
+
+def open_camera_auto(cam: dict, exclude=(), max_scan: int = 6):
+    """config 인덱스를 먼저 시도하고, 실패하면 다른 인덱스를 스캔해 실제 프레임이
+    들어오는 카메라를 잡는다. USB 허브/포트 변경으로 인덱스가 바뀌어도 자동 복구.
+
+    exclude: 건너뛸 인덱스(예: 이미 상부가 점유한 인덱스) — 같은 카메라 중복 방지.
+    반환: (cap, used_index). 못 찾으면 (None, -1).
+    """
+    exclude = set(exclude)
+    preferred = cam.get("index", 0)
+
+    # 1) config 의 선호 인덱스 우선 시도
+    order = [preferred] + [i for i in range(max_scan) if i != preferred]
+    for idx in order:
+        if idx in exclude:
+            continue
+        cap = open_camera(cam, index=idx)
+        if _delivers_frame(cap):
+            return cap, idx
+        cap.release()
+    return None, -1
 
 
 def center_square(frame):

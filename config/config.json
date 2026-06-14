@@ -9,8 +9,10 @@
     "yolo_iou": 0.4,
     "yolo_imgsz": 416,
     "min_conf": 0.40,
-    "inspect_frames": 5,
+    "inspect_frames": 10,
     "inspect_window_sec": 1.0,
+    "_defect_min_frames_note": "10프레임 중 DEFECT가 이 수 이상이면 불량 판정. 낮을수록 불량 잘 잡음(오검출↑). 3=보수적(불량 놓침), 2=민감.",
+    "defect_min_frames": 3,
 
     "yolo_class_map": {
       "IC":      { "part": "IC",            "verdict": "PASS" },
@@ -33,9 +35,46 @@
       "canny_low": 50,
       "canny_high": 150,
       "blur_ksize": 5,
-      "expected_pin_count": { "IC": 14, "TerminalBlock": 6, "Heatsink": 0, "Capacitor": 2 },
+      "_expected_note": "한쪽 측면에서 보이는 핀 개수(전체의 절반). DIP-8=4, DIP-16=8, DIP-28=14. 상부분류가 모든 IC를 'IC' 한 버킷으로 주므로 테스트 부품에 맞춰 설정. 백라이트 없으면 ±1 초과 시 BENT.",
+      "expected_pin_count": { "IC": 8, "TerminalBlock": 3, "Heatsink": 0, "Capacitor": 2 },
+      "_peak_note": "정면 조명에선 핀1개가 양쪽 엣지(2피크)로 잡혀 과다카운트→peak_min_dist_px를 핀피치(끝점간 거리)의 ~60%로. 핀피치 40px면 24 전후. 백라이트(실루엣)면 6~10으로 낮춰도 됨.",
+      "_inspect_parts_note": "측면 핀검사를 적용할 상부판정 부품(영문 part). 이 목록에 없으면 측면검사 스킵→핀판정 무시. 핀 있는 IC/터미널블록만 기본 대상.",
+      "inspect_parts": ["IC", "TerminalBlock"],
+      "_vote_note": "측면 10프레임 투표: NORMAL이 side_normal_min_votes개 이상 '그리고' NORMAL>=BENT 면 정상, 아니면 핀휨(DEFECT). 각도 의존 측면검사의 오검출을 줄이는 보수적 통과 기준.",
+      "side_normal_min_votes": 3,
+      "peak_thresh": 0.40,
+      "peak_min_dist_px": 24,
+      "tip_window_px": 4,
+      "_tip_note": "tip_y_tolerance_px 는 이제 '끝점 기준선(틸트선)에서의 최대 잔차'. 부품 기울기는 무시되고 혼자 삐져나온 핀만 잡힘. 정면조명 노이즈 감안 12~15, 백라이트면 8~10.",
       "pin_gap_tolerance_pct": 30,
-      "tip_y_tolerance_px": 10
+      "tip_y_tolerance_px": 12,
+      "_direction_note": "pin_direction: 부품별 핀 방향. 'down'=핀이 아래(DIP IC 기본), 'toward_camera'=핀이 카메라를 향함(터미널블록). 방향에 따라 검출 알고리즘이 달라짐.",
+      "pin_direction": {
+        "IC": "down",
+        "TerminalBlock": "toward_camera"
+      },
+      "_count_tol_note": "pin_count_tolerance: 부품별 핀 수 허용 오차. 기본 1(±1 허용). 0이면 정확히 일치해야 NORMAL. 터미널블록처럼 핀 수가 적으면 0이 권장.",
+      "pin_count_tolerance": {
+        "IC": 1,
+        "TerminalBlock": 0
+      },
+      "_color_note": "color_segment: toward_camera 모드에서 몸체를 색상(HSV)으로 분리해 안정적 ROI 확보(배경 잡음·박스흔들림 제거). 터미널블록=파란 몸체. h_lo/hi는 OpenCV 색상(0~179, 파랑~100~130), s_min은 채도하한, v_min은 밝기하한. live_pin 으로 몸체가 깔끔히 잡히는지 확인 후 조정.",
+      "color_segment": {
+        "TerminalBlock": { "h_lo": 90, "h_hi": 130, "s_min": 50, "v_min": 40 }
+      },
+      "min_body_area_px2": 2000,
+      "_metal_note": "metal_pin: 몸체 ROI 안 밝은 은색 픽셀 마스크. 핀=상단 노출금속+그 아래 리드. close_h_px로 세로로 닫아 한 덩어리로 잇고, min_height_px보다 짧은 반사(상단금속만)는 핀에서 제외. 휨은 lean=|리드끝x - 상단x| 가 lean_tol_px 이상이면 BENT(리드가 옆으로 휜 것). v_min=밝기하한(150~), s_max=채도상한(은색=낮음, ~90), band_px=위/아래 x추정 띠두께. 's' 패널에서 핀 리드가 흰색으로 이어져 보이도록, 'q'전 lean값 확인 후 lean_tol 조정.",
+      "metal_pin": {
+        "v_min": 90,
+        "s_max": 90,
+        "min_area_px2": 20,
+        "max_area_px2": 8000,
+        "lead_extend_px": 40,
+        "close_h_px": 100,
+        "band_px": 8,
+        "min_height_px": 20,
+        "lean_tol_px": 30
+      }
     }
   },
 
@@ -53,7 +92,18 @@
         "wb_temperature": 4500
       }
     },
-    "side": { "index": 1 }
+    "side": {
+      "index": 2, "width": 1280, "height": 720, "fps": 30,
+      "fourcc": "MJPG",
+      "controls": {
+        "_comment": "측면 핀검사는 백라이트(역광) 실루엣이 핵심. 백라이트 추가 후 exposure 를 낮춰(-7~-9) 부품을 검은 실루엣으로, gain 0~10 으로 배경 노이즈 억제. 핀 끝점 y편차/간격을 픽셀로 재므로 촬영 거리·각도 고정 필수.",
+        "auto_exposure": 0.25,
+        "exposure": -6,
+        "gain": 30,
+        "auto_wb": 0,
+        "wb_temperature": 4500
+      }
+    }
   },
 
   "stream": {
@@ -69,8 +119,15 @@
     "camera_to_gate1_cm": 30,
     "camera_to_gate2_cm": 45,
     "gate_delay_offset_sec": -7.5,
-    "last_part_drop_sec": 35.0,
-    "tray_advance_ms": 2000
+    "last_part_drop_sec": 39.0,
+    "tray_advance_ms": 2150,
+    "_gate_part_offset_note": "부품별·게이트별 게이트 발사 미세보정(초). 게이트 지연에 더해진다. 게이트가 '빠름'(부품 도착 전 밀음)이면 +(더 늦게), '늦음'(부품 지나간 뒤)이면 -(더 빨리). 키: 부품한글명 → {\"1\":불량게이트, \"2\":중복게이트}. 없으면 0.",
+    "gate_part_offset_sec": {
+      "방열판":   { "1": 0.2, "2": 0.5 },
+      "터미널블록": { "2": -1.5 },
+      "커패시터":  { "2": 0.5 },
+      "IC칩":     {}
+    }
   },
 
   "serial": {
@@ -86,32 +143,40 @@
   },
 
   "sensor": {
-    "debounce_sec": 0.5,
+    "_debounce_note": "같은 부품의 IR 중복 트리거(~1초) 무시 기간. 너무 짧으면(0.5) 한 부품이 두 번 검사돼 다음 트레이로 샘. 부품 투입 간격(~4초)보다 작게. 2.0 권장.",
+    "debounce_sec": 2.0,
     "trigger_to_capture_sec": 6.0
   },
 
   "robot": {
-    "host": "192.168.0.47",
+    "host": "192.168.0.17",
     "port": 9000,
     "_port_note": "pymycobot 공식 소켓 서버 포트(9000) — 기존 커스텀 RPi4 JSON 서버(9002) 아님. real 전환 시 Pi에서 공식 소켓 서버 실행 + 'pip install pymycobot' 필요. mock 은 mock.robot.port(9002, MockMyCobot) 사용.",
     "speed": 80,
-    "dummy_mode": true,
+    "dummy_mode": false,
     "gripper_open": 100,
-    "gripper_close": 30,
+    "gripper_close": 10,
+    "_gripper_note": "값 0~100, 낮을수록 더 닫힘. close=0 은 최대 그립력(물체에 닿으면 그 자리에서 힘으로 누름) — 트레이 안 놓치게. 너무 세서 부품/그리퍼 무리가면 5~10 으로 올릴 것.",
+    "path_file": "config/robot_path.json",
+    "_path_note": "경로 교시 파일(우선). Pi 에서 tools/robot_teach.py 로 교시 → 'scp er@<Pi-IP>:~/visipick/path.json config/robot_path.json'. 있으면 4자세 무시하고 경로 재생. 슬롯별 적재는 robot_path_1/2/3.json (robot_teach.py --slot N). (Pi IP는 DHCP라 바뀜 — host 키와 함께 실측값으로 갱신할 것)",
     "pickup_angles": [0, 0, 0, 0, 0, 0],
     "lift_angles":   [0, 0, 0, 0, 0, 0],
     "place_angles":  [0, 0, 0, 0, 0, 0],
     "home_angles":   [0, 0, 0, 0, 0, 0],
-    "_angles_note": "4개 자세는 티칭으로 채울 것 — robot.dummy_mode=false 로 두고 get_angles() 기록 (Phase2 Step6 dense teach 10~15점). 현재 0 은 미티칭 플레이스홀더.",
+    "_angles_note": "4자세는 경로 파일이 없을 때만 쓰는 구버전 폴백. 전부 0(미티칭 플레이스홀더)이면 robot.py 가 이재를 거부한다(허공 동작 방지).",
     "joint_limits": { "j2_min_deg": -120, "j3_min_deg": -120 }
   },
 
   "agv": {
     "count": 2,
     "speed": 50,
-    "dummy_mode": true,
+    "dummy_mode": false,
+    "trays_per_load": 3,
+    "_trays_per_load_note": "AGV 한 대에 싣는 트레이 수. 3 이면 트레이 3개를 자리별 경로(robot_path_1/2/3.json)로 싣고 다 차면 1회 출발. 1 이면 트레이마다 즉시 출발(단일 robot_path.json). 자리별 경로는 tools/robot_teach.py --slot 1/2/3 으로 교시.",
+    "_initial_home_note": "시작 시 수동으로 홈에 놓는 AGV의 홈 배치. 홈 도착지점엔 RFID가 없어(교차로 전 RFID로만 홈번호 판단) 수동 배치 AGV는 스스로 홈번호를 못 보고함 → 여기서 알려줌. {\"agv_id\": home_id}. 예: {\"2\":1} = AGV2를 홈1에 배치. 출발점에 놓는 AGV는 적지 않음(node=START 자동 인식).",
+    "initial_home": { "2": 1 },
     "nodes": {
-      "start":     "N1",
+      "start":     "START",
       "warehouse": "WAREHOUSE"
     }
   },
@@ -127,7 +192,7 @@
   },
 
   "mqtt": {
-    "broker": "localhost",
+    "broker": "192.168.0.15",
     "port": 1883,
     "topics": {
       "inspection":   "visipick/inspection",

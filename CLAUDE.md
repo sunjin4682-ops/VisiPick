@@ -60,14 +60,19 @@ def judge(part_type, defect_result, recipe_state) -> str:
     return "NEEDED"                                            # 통과 → 트레이
 ```
 
-## DIP IC 레시피(현재는 IC칩, 방열판, 터미널블록, 커패시터를 쓰고 부품 변경은 계획중)
+## 레시피 부품 (확정 — 4종)
 
-| # | 부품 | 패키지 | 식별 방법 |
-|---|------|--------|-----------|
-| 1 | NE555P | DIP-8 | 면적 + 핀 수 (8개) |
-| 2 | CD4017BE | DIP-16 | 면적 + 마킹 "4017" |
-| 3 | ATmega328P | DIP-28 | 면적 + 핀 수 (28개) |
-| 4 | 74HC595N | DIP-16 | 면적 + 마킹 "595" |
+상부 YOLO(`best.pt`, 7클래스)로 종류·불량 식별. 측면(OpenCV)은 핀 있는 부품만 핀휨 검사.
+
+| # | 부품 | YOLO 클래스 | 측면 핀검사 |
+|---|------|-------------|-------------|
+| 1 | IC칩 | `IC` | O — down 모드(핀 아래) |
+| 2 | 터미널블록 | `TB` | O — toward_camera 모드(핀이 카메라 향함) |
+| 3 | 방열판 | `HS` | X |
+| 4 | 커패시터 | `CAP` | X |
+
+불량 클래스(3종): `Broken`(파손) · `Dented`(찌그러짐) · `Pinbent`(핀휨) → REJECT.
+config: `recipe.parts = ["IC칩","터미널블록","방열판","커패시터"]`, `vision.pin_inspector.inspect_parts = ["IC","TerminalBlock"]`.
 
 ## 디렉토리 구조
 
@@ -113,23 +118,29 @@ C:\VisiPick\
 
 ## 실행 명령
 
-```bash
+> ⚠️ **반드시 `-m` 모듈 방식으로 실행** (슬래시 경로 직접 실행 금지)
+> `src/`가 정식 패키지(`__init__.py`)라 `from src.utils...` 임포트를 쓴다.
+> `python src/api/api_server.py` 처럼 실행하면 **`ModuleNotFoundError: No module named 'src'`** 발생.
+> 항상 루트(`C:\VisiPick`)에서 `python -m src.api.api_server` 형식(점 구분, `.py` 없음)으로 실행할 것.
+> (불가피하게 슬래시로 실행해야 하면 `$env:PYTHONPATH="C:\VisiPick"` 먼저 설정)
+
+```powershell
 # 1. MQTT 브로커
 docker-compose -f config/docker-compose.yml up -d
 
 # 2. Mock 서버 3개 (Mock 환경)
-python mock/MockESP32.py       # port 9001
-python mock/MockMyCobot.py     # port 9002
-python mock/MockAGV.py         # port 9003
+python -m mock.MockESP32       # port 9001
+python -m mock.MockMyCobot     # port 9002
+python -m mock.MockAGV         # port 9003
 
-# 3. 메인 실행
-python src/core/state_machine.py
+# 3. 메인 실행 (FSM)
+python -m src.core.state_machine
 
 # 4. API 서버
-python src/api/api_server.py   # http://localhost:8000/docs
+python -m src.api.api_server   # http://localhost:8000/docs
 
 # 5. WPF 독립 개발용 더미 발행
-python mock_publisher.py
+python -m mock.mock_publisher
 
 # 6. DB 초기화 (최초 1회)
 python -m src.utils.db_init
@@ -138,42 +149,77 @@ python -m src.utils.db_init
 powershell scripts/backup.ps1
 ```
 
+### 전체 가동 순서 (실하드웨어)
+1. **브로커** — Docker Desktop 에서 `visipick-mqtt` Running 확인 (또는 위 1번 명령)
+2. **API 서버** — `python -m src.api.api_server` (별도 터미널, 켜둠)
+3. **FSM** — `python -m src.core.state_machine` (또 별도 터미널, 켜둠)
+4. 부품 투입 → IR 트리거 → 검사 시작
+* ESP32(COM5)·카메라 연결 + 아두이노 시리얼 모니터 닫기(포트 점유) 선행
+* ESP32 없이 WPF 연동만 테스트: `config.serial.dummy_mode=true` (단 IR 트리거 없어 자동검사 X)
+
 ## 통신 프로토콜
 
 | 프로토콜 | 방향 | 엔드포인트 | 포맷 |
 |----------|------|------------|------|
-| USB Serial | PC ↔ ESP32 | COM8, 115200 baud | JSON + `\n` |
-| Ethernet TCP | PC ↔ myCobot | RPi4 IP:9002 | pymycobot |
-| MQTT | PC ↔ AGV 1·2 | localhost:1883 | JSON |
-| WebSocket | Python ↔ WPF | localhost:8000/ws | JSON |
-| HTTP/REST | Client ↔ API | localhost:8000 | JSON |
+| USB Serial | PC ↔ ESP32 | COM5, 115200 baud | JSON + `\n` |
+| Ethernet TCP | PC ↔ myCobot | RPi4 IP:9000 (공식 소켓 서버) | pymycobot |
+| MQTT | PC ↔ AGV 1·2 | 192.168.0.15:1883 | 문자열 명령 / JSON 상태 |
+| WebSocket | Python ↔ WPF | :8000/ws (서버 IP) | JSON |
+| HTTP/REST | Client ↔ API | :8000 (서버 IP) | JSON |
+
+## WPF 원격 접속 / 네트워크 (Tailscale 필수)
+
+> ⚠️ **WPF가 다른 PC면 교실 Wi-Fi(`moble_classroom`)에서 직접 접속 안 됨 → Tailscale 필요.**
+> 교실/공용 Wi-Fi는 **클라이언트 격리(AP isolation)**가 켜져 있어 같은 SSID라도 PC↔PC 직접 통신을 막는다.
+> 공유기 설정을 못 바꾸므로 **Tailscale VPN**으로 우회하는 게 표준 해법.
+
+서버는 `0.0.0.0` 으로 바인딩(API `uvicorn ... host=0.0.0.0`, 브로커 Docker `0.0.0.0:1883`)되어 있어
+**Python 코드 수정 없이** LAN IP·Tailscale IP 둘 다로 접속 가능하다. 막는 건 네트워크/방화벽뿐.
+
+**진단 순서 (WPF PC에서):**
+1. `ping 192.168.0.15` → 응답 없으면 교실 Wi-Fi가 PC끼리 막는 것 → **Tailscale**
+2. `Test-NetConnection 192.168.0.15 -Port 8000` → False면 방화벽/네트워크
+3. 서버 PC 방화벽 인바운드 8000·1883 개방 필요:
+   ```powershell
+   New-NetFirewallRule -DisplayName "VisiPick API 8000" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+   New-NetFirewallRule -DisplayName "VisiPick MQTT 1883" -Direction Inbound -LocalPort 1883 -Protocol TCP -Action Allow
+   ```
+
+**Tailscale 설정:**
+- 두 PC 모두 https://tailscale.com/download 설치 → **같은 계정**으로 로그인
+- 서버 PC IP 확인: `tailscale ip -4` (예: `100.x.x.x`)
+- **WPF 접속 주소를 서버의 Tailscale IP(`100.x.x.x`)로** — MQTT `:1883`, 영상/REST `:8000`
+- AGV 는 계속 교실 LAN(`192.168.0.15:1883`)으로 붙어도 됨(같은 브로커, 무관)
 
 ## MQTT 토픽
 
 | 토픽 | 방향 | 페이로드 예시 |
 |------|------|--------------|
-| `visipick/inspection` | vision → all | `{"part_type":"NE555P","classification":"NEEDED","defect_code":"PASS","confidence":0.97}` |
-| `visipick/agv/{id}/status` | AGV → all | `{"agv_id":1,"state":"moving","node":"N3","timestamp":"..."}` |
-| `visipick/agv/{id}/command` | PC → AGV | `{"action":"GO","destination":"WAREHOUSE","timestamp":"..."}` |
-| `visipick/system/event` | any → WPF | `{"source":"Camera1","event_type":"INFO","message":"NE555P 검출"}` |
-| `visipick/system/state` | SM → WPF | `{"state":"TRAY_TRANSFER","timestamp":"..."}` |
+| `visipick/inspection` | vision → all | `{"part":"IC","classification":"NEEDED","verdict":"PASS","defect_codes":[],"confidence":0.97}` |
+| `visipick/agv/{id}/status` | AGV → all | `{"agv_id":"AGV_1","status":"TRACKING","next_action":"ARRIVED_WAREHOUSE_1","node":"WAREHOUSE_1","selected_home":1,"home1_free":false}` |
+| `visipick/agv/{id}/command` | PC → AGV | **문자열**: `GO_WAREHOUSE_1` · `TRAY_LOADED` · `GO_HOME_1` · `CLEAR_MISSION` · `EMERGENCY_STOP` |
+| `visipick/system/event` | any → WPF | `{"source":"Camera1","event_type":"INFO","message":"IC 검출"}` |
+| `visipick/system/state` | SM → WPF | `{"state":"RUNNING","timestamp":"..."}` |
+
+> AGV `command` 는 **plain string**(JSON 아님). status 는 JSON. `next_action` 의 `ARRIVED_WAREHOUSE_1/2`·`ARRIVED_HOME` 가 도착 이벤트. 전체 필드는 `agv_mqtt.py` 주석 참고.
 
 ## 설정 (config/config.json 주요 키)
 
 ```json
 {
   "cameras": {
-    "top":  { "index": 0, "width": 1920, "height": 1080, "fps": 90 },
-    "side": { "index": 1, "width": 1920, "height": 1080 }
+    "top":  { "index": 0, "width": 1280, "height": 720, "fps": 60, "square_crop": true },
+    "side": { "index": 1, "width": 1280, "height": 720, "fps": 30 }
   },
   "conveyor": {
     "speed_cm_per_s": 1.5,
-    "gate1_delay_ms": 0,
-    "gate2_delay_ms": 0
+    "gate_delay_offset_sec": -7.5,
+    "last_part_drop_sec": 35.0,
+    "tray_advance_ms": 2000
   },
-  "serial":   { "port": "COM8", "baudrate": 115200 },
-  "robot":    { "host": "192.168.0.47", "port": 9002, "speed": 80 },
-  "mqtt":     { "broker": "localhost", "port": 1883 },
+  "serial":   { "port": "COM5", "baudrate": 115200, "dummy_mode": false },
+  "robot":    { "host": "192.168.0.47", "port": 9000, "speed": 80, "dummy_mode": true },
+  "mqtt":     { "broker": "192.168.0.15", "port": 1883 },
   "recipe":   { "parts": ["IC칩", "터미널블록", "방열판", "커패시터"] },
   "database": { "path": "C:\\VisiPick\\data\\visipick.db",
                 "retention_days_inspection": 30,
@@ -217,10 +263,12 @@ logger = setup_logger("module_name")   # → logs/module_name-YYYY-MM-DD.log
 | 증상 | 원인 / 해결 |
 |------|------------|
 | Camera1/2 인식 안 됨 | `index` 번호 확인 — USB 연결 순서에 따라 0/1이 바뀜 |
-| ESP32 응답 없음 | `python mock/MockESP32.py` 실행 또는 COM8 연결 확인 |
-| MQTT connection refused | `docker-compose -f config/docker-compose.yml up -d` |
-| myCobot timeout | `config["robot"]` host/port 확인 (RPi4 IP) |
-| AGV MQTT 미수신 | AGV ESP32-CAM Wi-Fi + Mosquitto 브로커 연결 확인 |
+| ESP32 응답 없음 / `could not open port 'COM5'` | COM5 연결·드라이버(CH340/CP210x) 확인, 아두이노 시리얼 모니터 닫기. `python -m serial.tools.list_ports -v` 로 실제 포트 확인 후 `config.serial.port` 수정 |
+| MQTT connection refused | `docker-compose -f config/docker-compose.yml up -d` (Docker `visipick-mqtt` Running) |
+| myCobot timeout | `config["robot"]` host/port(9000, 공식 소켓 서버) 확인. Pi 에서 소켓 서버 실행 필요 |
+| AGV MQTT 미수신 | AGV Wi-Fi(`moble_classroom`) + 브로커 IP `192.168.0.15` 확인 |
+| WPF 가 서버에 접속 안 됨 | 방화벽 8000·1883 개방 + 교실 Wi-Fi 격리 → **Tailscale**(위 "WPF 원격 접속" 섹션) |
+| `ModuleNotFoundError: No module named 'src'` | 슬래시 실행 금지 → `python -m src.api.api_server` 형식으로 |
 | 한글 깨짐 | `logger.py` — `sys.stdout/stderr.reconfigure(encoding='utf-8')` 호출 여부 확인 |
 | ImportError: src.utils… | 실행 디렉토리가 `C:\VisiPick` 인지 확인 |
 | 게이트 타이밍 오차 | `config["gates"]["1"]["delay_sec"]` 실측 후 조정 (카메라→게이트 거리 / 컨베이어 속도) |

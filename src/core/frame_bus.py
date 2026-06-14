@@ -15,6 +15,7 @@ V6.4 통신 아키텍처: 영상=MJPEG(HTTP :8000). 그런데 카메라를 점�
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -42,8 +43,13 @@ def publish(name: str, frame_bgr, quality: int | None = None) -> bool:
     if not ok:
         return False
     dst = _path(name)
-    tmp = dst.with_suffix(".jpg.tmp")
-    tmp.write_bytes(buf.tobytes())
+    # 임시파일 이름을 스레드마다 다르게 — 같은 'side'를 연속송출 스레드와 검사 스레드가
+    # 동시에 쓰면 같은 .tmp 에서 PermissionError(쓰기 충돌). 스레드별 .tmp 로 분리.
+    tmp = dst.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_bytes(buf.tobytes())
+    except PermissionError:
+        return False              # 일시적 충돌 — 이번 프레임만 버림(다음 프레임이 곧 옴)
     # 원자적 교체. Windows 는 reader(api_server)가 dst 를 읽는 순간 교체가
     # PermissionError(WinError 5) 로 실패할 수 있어 — 일시적이라 잠깐 후 재시도.
     for _ in range(5):

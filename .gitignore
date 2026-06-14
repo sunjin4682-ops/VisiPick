@@ -36,3 +36,9 @@ Thumbs.db
 # 환경 변수 / 시크릿
 *.env
 secrets.*
+
+# 백업본 / 모델 사본 (소스 아님)
+backup/
+
+# MJPEG 런타임 스트림 프레임
+data/stream/
