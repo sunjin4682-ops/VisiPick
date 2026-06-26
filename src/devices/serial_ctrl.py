@@ -25,8 +25,12 @@ class SerialController:
                더미 모드에서는 state_machine의 _start_dummy_trigger가 대신하므로 무시.
     """
 
-    def __init__(self, on_sensor: Callable | None = None):
+    def __init__(self, on_sensor: Callable | None = None,
+                 on_estop: Callable | None = None,
+                 on_estop_clear: Callable | None = None):
         self._on_sensor = on_sensor
+        self._on_estop  = on_estop        # 물리 비상정지 버튼 눌림 콜백 (ESP32 → Python)
+        self._on_estop_clear = on_estop_clear  # 물리 비상정지 버튼 해제 콜백
         self._ser       = None
         self._send_lock = threading.Lock()   # 송신-수신 충돌 방지
 
@@ -49,14 +53,26 @@ class SerialController:
         def _loop():
             while self._ser and self._ser.is_open:
                 try:
+                    raw = None
+                    # 락 안에서는 '읽기'만 — 콜백이 _send()로 같은 락을 재요청하면
+                    # 데드락(비상정지 콜백 → emergency_stop()/set_conveyor_speed() 가 멈춤).
                     with self._send_lock:
-                        # 데이터가 있을 때만 readline — _send()와 readline() 충돌 방지
                         if self._ser.in_waiting > 0:
                             raw = self._ser.readline()
-                            if raw:
-                                msg = json.loads(raw.decode("utf-8").strip())
-                                if msg.get("type") == "sensor_triggered":
-                                    self._on_sensor()
+                    if raw:
+                        msg = json.loads(raw.decode("utf-8", errors="ignore").strip())
+                        t = msg.get("type")
+                        if t == "sensor_triggered":
+                            if self._on_sensor:
+                                self._on_sensor()
+                        elif t == "emergency_stop" and msg.get("source") == "button":
+                            logger.warning("물리 비상정지 버튼 눌림!")
+                            if self._on_estop:
+                                self._on_estop()
+                        elif t == "emergency_clear" and msg.get("source") == "button":
+                            logger.warning("물리 비상정지 버튼 해제됨")
+                            if self._on_estop_clear:
+                                self._on_estop_clear()
                 except Exception as e:
                     logger.warning(f"시리얼 수신 오류: {e}")
                 time.sleep(0.01)   # 10ms 폴링
@@ -86,6 +102,20 @@ class SerialController:
             msg["duration_ms"] = TRAY_ADVANCE_MS
         return self._send(msg)
     
+    def start_return_conveyor(self) -> bool:
+        """컨2(중복 반환 컨베이어, 상시 ON) 재가동. 펌웨어 텍스트 명령 'CONV2:START'.
+        비상정지 시 펌웨어가 컨2를 멈추는데 컨베이어 시작이 컨1만 켜므로, 복귀 시
+        컨2도 다시 켜기 위해 호출한다. (응답 ack 는 수신 루프가 소진)"""
+        if DUMMY_MODE:
+            return True
+        try:
+            with self._send_lock:
+                self._ser.write(b"CONV2:START\n")
+            return True
+        except Exception as e:
+            logger.error(f"컨2 시작 오류: {e}")
+            return False
+
     def emergency_stop(self) -> bool:
         """비상정지 — 컨1·컨2·컨3·게이트 전체 정지 (펌웨어 emergencyStop())."""
         return self._send({"type": "emergency_stop", "timestamp": _now()})
@@ -99,7 +129,8 @@ class SerialController:
                 with self._send_lock:
                     self._ser.reset_input_buffer()
                     self._ser.write((json.dumps(msg) + "\n").encode("utf-8"))
-                    resp = json.loads(self._ser.readline().decode("utf-8").strip())
+                    raw = self._ser.readline()
+                    resp = json.loads(raw.decode("utf-8", errors="ignore").strip())
             ok = resp.get("status") == "ok"
             if not ok:
                 logger.warning(f"ESP32 응답 실패: {resp}")

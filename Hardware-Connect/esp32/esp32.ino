@@ -32,6 +32,7 @@
 #define CONV_DIR    12
 #define CONV_PUL    14
 #define END_SENSOR  34
+#define ESTOP_PIN   25
 
 // ── L9110S 컨베이어 config ────────────────
 #define CONV2_A  26  // A모터 (중복 부품 반환 컨베이어 — 상시 ON)
@@ -76,7 +77,7 @@ const float MM_PER_STEP = 0.002867;
 // ── L9110S 컨베이어 상태 ──────────────────
 bool conv3Running = false;
 unsigned long conv3Timer = 0;
-#define CONV3_RUN_TIME 2000          // 기본 2초 (tray_cmd 에 duration_ms 없을 때 폴백)
+#define CONV3_RUN_TIME 2300          // 기본 2초 (tray_cmd 에 duration_ms 없을 때 폴백)
 unsigned long conv3RunTime = CONV3_RUN_TIME;  // 실제 사용값 — PC가 duration_ms 로 덮어씀
 
 // ── 딜레이 예약 구조체 ────────────────────
@@ -99,6 +100,13 @@ bool serialConnected = false;
 #define ENABLE_PERIODIC_STATUS 0
 #define STATUS_INTERVAL 200
 unsigned long lastStatusTime = 0;
+
+// ── 물리 비상정지 버튼 ───────────────────
+volatile bool estopPressed = false;
+bool estopHeld = false;    // 디바운스된 현재 눌림 상태 (해제 감지용)
+void IRAM_ATTR onEstopPressed() {
+  estopPressed = true;   // 인터럽트 핸들러 — 플래그만 세움, 처리는 loop()에서
+}
 
 // ── 끝단 센서 상태 ────────────────────────
 bool endSensorState = false;
@@ -514,6 +522,10 @@ void setup() {
   // 끝단 센서 초기화 — GPIO34는 내부 풀업 불가(입력전용). 외부 풀업 저항 필요.
   pinMode(END_SENSOR, INPUT);
 
+  // 물리 비상정지 버튼 — GPIO25, INPUT_PULLUP (버튼 GND연결, 눌리면 LOW)
+  pinMode(ESTOP_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ESTOP_PIN), onEstopPressed, FALLING);
+
   // L9110S 초기화
   pinMode(CONV2_A, OUTPUT);
   pinMode(CONV2_B, OUTPUT);
@@ -539,6 +551,36 @@ void setup() {
 // ── loop ──────────────────────────────────
 void loop() {
   esp_task_wdt_reset();
+
+  // 물리 비상정지 버튼 — 눌림(FALLING 인터럽트) + 해제(폴링) 양쪽 신호 전송
+  // 디바운스: 모터 EMI 스파이크가 FALLING 인터럽트를 오발화시킴 → 핀이 실제로
+  // LOW(눌림)를 ~20ms 유지하는지 확인해 노이즈를 걸러낸다. 스파이크는 즉시 HIGH 복귀.
+  if (estopPressed) {
+    estopPressed = false;
+    bool reallyPressed = true;
+    for (int i = 0; i < 4; i++) {
+      delay(5);
+      if (digitalRead(ESTOP_PIN) == HIGH) { reallyPressed = false; break; }  // 노이즈 — 무시
+    }
+    if (reallyPressed && !estopHeld) {     // 새 눌림(중복 방지)
+      estopHeld = true;
+      emergencyStop();
+      Serial.println("{\"type\":\"emergency_stop\",\"source\":\"button\",\"status\":\"ok\"}");
+    }
+  }
+  // 버튼 해제 감지 — 눌림 상태에서 핀이 ~20ms 동안 HIGH(떨어짐) 유지되면 해제 통보.
+  // (모터 재가동은 Python/WPF '컨베이어 시작'이 담당 — 해제만으로 자동 재시작 안 함)
+  if (estopHeld && digitalRead(ESTOP_PIN) == HIGH) {
+    bool reallyReleased = true;
+    for (int i = 0; i < 4; i++) {
+      delay(5);
+      if (digitalRead(ESTOP_PIN) == LOW) { reallyReleased = false; break; }  // 노이즈 — 무시
+    }
+    if (reallyReleased) {
+      estopHeld = false;
+      Serial.println("{\"type\":\"emergency_clear\",\"source\":\"button\",\"status\":\"ok\"}");
+    }
+  }
 
   updateGates();
   updateConveyor();

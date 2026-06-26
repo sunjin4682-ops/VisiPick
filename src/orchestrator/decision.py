@@ -101,12 +101,15 @@ class Decision:
 
 # ── 김선진 경계 어댑터 ────────────────────────────────────────────────────────
 
-# 염재니 Verdict -> 분류 라벨 (UNCERTAIN 추가: 별도 라벨로 통계/WPF 패널 분리)
+# 염재니 Verdict -> 분류 라벨.
+# UNCERTAIN(저신뢰/미검출)은 DUPLICATE 와 물리 동작이 같다(반환 컨베이어 → 재투입).
+# WPF 가 UNCERTAIN 패널을 아직 안 만들어 3분류만 처리하므로 DUPLICATE 로 합쳐 내보낸다.
+# WPF 가 UNCERTAIN 을 지원하면 아래를 "UNCERTAIN":"UNCERTAIN" 로 되돌리면 다시 분리됨.
 _VERDICT_TO_LABEL = {
     "PASS":      "NEEDED",
     "REJECT":    "DEFECT",
     "DUPLICATE": "DUPLICATE",
-    "UNCERTAIN": "UNCERTAIN",
+    "UNCERTAIN": "DUPLICATE",   # WPF 3분류 통일 (원복: "UNCERTAIN")
 }
 
 # 분류 라벨 -> 게이트 동작. UNCERTAIN 은 DUPLICATE 와 같은 Gate1(반환 컨베이어)로.
