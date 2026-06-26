@@ -1140,6 +1140,70 @@ ESP32 → `{"type":"sensor_triggered"}` 시리얼 전송 → 수신 루프 → `
 - AGV 브로커 IP: Python 서버는 `192.168.0.15`, 일부 AGV 펌웨어는 `.13`으로 세팅되어 있을 수 있음 — 통일 필요.
 - Claude 계정: 현재 타인 계정 공유 중 → 메모리 혼동 위험. 가능하면 계정 분리 권장.
 
+## 2026-06-12
+
+> **이날 목표:** 로봇팔 경로 교시(트레이 수평 이재) + AGV 자동복귀 라운드트립 + 측면/촬영 카메라 실물 정합 + E-Stop 디바운스
+
+### 완료된 작업 ✅
+
+#### 로봇팔 경로 교시(Path Teaching) — 4자세 → 다관절 경유점 재생
+4자세(home/pickup/lift/place)만으로는 이동 중 관절이 급변해 트레이가 뒤집힘 → 경유점을 촘촘히(10~15점) 찍어 하나의 경로로 재생하는 방식으로 전환.
+- `tools/robot_teach.py` 신규 — **Pi 위에서 실행**하는 교시 도구. 경유점을 순서대로 찍어 `path.json` 저장, 집기/놓기 지점만 표시. AGV 트레이 3칸별로 `--slot 1/2/3` → `path1/2/3.json`(집기·이동 공유, 놓기점만 다름).
+- `config/robot_path_1.json` · `robot_path_2.json` · `robot_path_3.json` 생성 — 슬롯별 6축 경유점 경로(`speed`/`speed_empty`/`arrive_tol_deg`/`arrive_wait_sec` + `waypoints[{angles[6], grip}]`).
+- `src/devices/robot.py` — 경로 파일 재생 지원: `_load_path(slot)`(JSON 손상·waypoint 형식 오류 시 **파일 전체 무시** 폴백 — 트레이 쥔 채 중간 정지 방지), `transfer_tray(slot)`로 슬롯별 경로 재생, `home()`이 경로 첫 점을 홈으로 사용. host 기본값 `192.168.0.47` → `192.168.0.17`(DHCP라 실측 갱신).
+- `tools/Server_280.py` 추가 — myCobot 280 Pi 공식 소켓 서버(포트 9000) 참조본(Pi 배치용).
+- `src/core/state_machine.py` — `_trays_on_agv` 카운트로 트레이 적재 칸(`slot = _trays_on_agv+1`) 추적 → `transfer_tray(slot)` 호출, `TRAYS_PER_DISPATCH` 도달 시 AGV 출발.
+
+#### AGV MQTT 라운드트립 재설계 — ESP32 자동복귀 정합
+- 창고 도착 후 **ESP32가 5초 대기 → 자동 회전 → 자동 복귀**하는 펌웨어에 맞춰 PC측 `UNLOAD`/`GO_N1` 명령 제거.
+- 도착 핸들러 분리: `_on_warehouse_arrived()`(창고 도착=배달 완료, 자동복귀 대기) · `_on_home_arrived()`(홈 복귀 완료 → 슬롯 점유) · `_on_start_arrived()`(START 복귀=홈 비우기, 핸드오버 가이드 `LEAVE_HOMEx_TO_START` 흐름). `_pending` phase `outbound`→`returning` 추적.
+- `_command()` payload를 plain string으로 정리, `emergency_stop/clear()`·`go_start()`·`go_home()` 공개 API 정비.
+- `tools/test_agv.py`·`tools/test_robot.py`로 실 AGV/로봇 명령·상태 디버깅.
+
+#### 측면/촬영 카메라 실물 정합
+- `config.cameras.side.index` 2로 변경(USB 연결 순서 실측) + `fourcc: MJPG` + 노출·게인·화벨 컨트롤 풀세팅. 측면 핀검사는 **백라이트(역광 실루엣)**가 근본 해법임을 주석에 명기.
+- `src/vision/camera_side.py`·`camera_util.py` — 그래버/오픈 경로 정합.
+- `tools/camtest.py`·`camtest_dual.py` 신규 — 단일/듀얼 카메라 인덱스·프레임 확인 도구.
+
+#### E-Stop 디바운스 (`esp32.ino`)
+- 물리 비상정지 버튼(GPIO25)의 **모터 EMI 스파이크 오발화** 차단: FALLING 인터럽트는 플래그만 세우고, loop에서 핀이 실제 ~20ms LOW 유지하는지 4회 폴링 확인 후에만 `emergencyStop()`. 해제(HIGH ~20ms 유지)도 폴링 감지.
+- `CONV3_RUN_TIME` 폴백 2300ms — `tray_cmd`에 `duration_ms` 없을 때 컨3 구동시간.
+
+### 이슈/메모 ⚠️
+- 로봇 Pi host는 DHCP라 IP가 바뀜 → `hostname -I`/RealVNC로 실측 후 `config.robot.host` 갱신 필요.
+- 경로 파일은 scp 도중 잘릴 수 있어 `_load_path`가 JSON/형식 검증 실패 시 파일 전체를 무시(부분 재생 금지).
+
+---
+
+## 2026-06-13
+
+> **이날 목표:** 측면 핀검사기 파라미터 config 외부화·튜닝 + 발표자료 생성
+
+### 완료된 작업 ✅
+
+#### 측면 핀검사 파라미터 전면 config 외부화 (`config.json`)
+하드코딩되어 있던 핀검사 임계값을 전부 `config.json`으로 빼고 부품별로 분기 — `live_pin.py`로 실측하며 코드 수정 없이 튜닝 가능하게.
+- 멀티프레임: `vision.inspect_frames: 10`, `defect_min_frames: 3`(10프레임 중 불량 3개 이상이어야 DEFECT — 오검출 억제).
+- 측면 투표: `side_normal_min_votes: 3`(NORMAL≥3 그리고 NORMAL≥BENT 면 정상).
+- 부품별 기대 핀 수(`expected_pin_count`: IC=8/TerminalBlock=3/…) + 허용오차(`pin_count_tolerance`: IC=±1, TerminalBlock=0).
+- 핀 방향 분기(`pin_direction`: IC=down, TerminalBlock=toward_camera), 색상 몸체분리(`color_segment` 파란 몸체 HSV), 금속핀 마스크(`metal_pin` v_min/s_max/close_h_px/lean_tol_px 등 — lean=|리드끝x−상단x| 으로 휨 측정).
+- 피크 병합(`peak_min_dist_px: 24` — 정면조명 양쪽엣지 2피크 과다카운트 방지), 끝점 잔차 기준(`tip_y_tolerance_px: 12` — 부품 틸트 무시, 혼자 삐진 핀만).
+
+#### 발표자료 생성
+- `tools/make_ppt.py` 신규 — 김선진 파트 발표 PPT 자동 생성(팀 템플릿 색/비율 매칭, python-pptx).
+
+### 다음 할 일
+- [ ] `live_pin.py`로 터미널블록 `lean_tol_px`·IC `tip_y_tolerance_px` 실측 튜닝 마무리
+- [ ] 측면 백라이트 설치 후 실루엣(down) 방식 재전환 검토
+- [ ] 로봇 슬롯별 경로(`robot_path_1/2/3.json`) 실 트레이로 수평 이재 검증
+- [ ] AGV HOME 출발 → WAREHOUSE → 자동복귀 풀 사이클 검증
+- [ ] `esp32.ino` 재업로드(E-Stop 디바운스 + `tray_cmd duration_ms` 반영)
+
+### 이슈/메모 ⚠️
+- 핀검사 임계값은 조명·촬영거리에 민감 → 백라이트/거리 고정 전까지는 `live_pin.py` 실측값 그때그때 반영 필요.
+
+---
+
 <!-- 새 날짜 작업 시 아래 템플릿 복사해서 추가 -->
 <!--
 ## YYYY-MM-DD
